@@ -1,5 +1,6 @@
 // AccountCreatorManager.js — Discord Account Creator UI
 import { showNotification } from '../utils/ui.js';
+import { icon } from '../utils/icons.js';
 
 const AC_VERSION = '1.1';
 const OWNER_NAME = 'Ahmed (4_3a)';
@@ -27,6 +28,7 @@ export class AccountCreatorManager {
     this._libSearch = '';
     this._libPage = 0;
     this._libPageSize = 20;
+    this._libModal = null;
   }
 
   // ── Init ────────────────────────────────────────────────────────────────
@@ -97,10 +99,10 @@ export class AccountCreatorManager {
   _stateMeta(state) {
     const m = {
       idle:      { cls: '',         label: 'خامل' },
-      running:   { cls: 'running',  label: '⚡ يعمل' },
-      done:      { cls: 'done',     label: '✅ اكتمل' },
-      cancelled: { cls: 'warn',     label: '⛔ ملغي' },
-      error:     { cls: 'danger',   label: '❌ خطأ' },
+      running:   { cls: 'running',  label: `${icon('bolt','ic-xs')} يعمل` },
+      done:      { cls: 'done',     label: `${icon('check','ic-xs')} اكتمل` },
+      cancelled: { cls: 'warn',     label: `${icon('stop','ic-xs')} ملغي` },
+      error:     { cls: 'danger',   label: `${icon('x','ic-xs')} خطأ` },
     };
     return m[state] || m.idle;
   }
@@ -150,7 +152,7 @@ export class AccountCreatorManager {
         <!-- Settings card -->
         <div class="ts-card">
           <div class="ts-card-head">
-            <div class="ts-card-title ar">⚙️ إعدادات الإنشاء</div>
+            <div class="ts-card-title ar">${icon('gear','ic-sm')} إعدادات الإنشاء</div>
           </div>
 
           <!-- SMS Provider (optional) -->
@@ -179,8 +181,8 @@ export class AccountCreatorManager {
               <div class="ts-field-label">
                 مفتاح API للـ SMS
                 ${cfg.hasSmsApiKey
-                  ? '<span class="ac-badge-ok">✓ محفوظ — الرقم سيُستخدم</span>'
-                  : '<span class="ac-badge-warn">⚠ غير محفوظ — الإنشاء بدون رقم هاتف</span>'}
+                  ? `<span class="ac-badge-ok">${icon('check','ic-xs')} محفوظ — الرقم سيُستخدم</span>`
+                  : `<span class="ac-badge-warn">${icon('warning','ic-xs')} غير محفوظ — الإنشاء بدون رقم هاتف</span>`}
               </div>
               <div class="ts-account-row" style="grid-template-columns:auto 1fr;">
                 <button class="ts-btn mint" id="ac-sms-save">حفظ</button>
@@ -222,7 +224,7 @@ export class AccountCreatorManager {
         <!-- Session config card -->
         <div class="ts-card">
           <div class="ts-card-head">
-            <div class="ts-card-title ar">🚀 إعدادات الجلسة</div>
+            <div class="ts-card-title ar">${icon('rocket','ic-sm')} إعدادات الجلسة</div>
           </div>
           <div class="ts-field">
             <div class="ts-field-label">عدد الحسابات المطلوب إنشاؤها</div>
@@ -238,16 +240,16 @@ export class AccountCreatorManager {
           <!-- Action buttons -->
           <div class="ts-actions">
             <button class="ts-btn danger big" id="ac-stop" ${!isRunning ? 'disabled' : ''}>إيقاف</button>
-            <button class="ts-btn mint big" id="ac-start" ${isRunning ? 'disabled' : ''}>▶ إنشاء حسابات</button>
+            <button class="ts-btn mint big" id="ac-start" ${isRunning ? 'disabled' : ''}>${icon('play','ic-sm')} إنشاء حسابات</button>
           </div>
           ${['done','error','cancelled'].includes(s.state) ? `
           <div class="ts-force-reset-row">
-            <button class="ts-btn warn" id="ac-force-reset">⚡ إعادة تعيين قسري</button>
+            <button class="ts-btn warn" id="ac-force-reset">${icon('bolt','ic-xs')} إعادة تعيين قسري</button>
           </div>` : ''}
         </div>
 
-        <!-- Accounts Library -->
-        ${this._renderLibraryCard()}
+        <!-- Accounts Library trigger -->
+        ${this._renderLibraryTrigger()}
 
         <!-- Log -->
         <div class="ts-log-wrap">
@@ -259,8 +261,8 @@ export class AccountCreatorManager {
             </div>
             <div class="ts-log-actions">
               <button class="ts-btn-xs" id="ac-log-autoscroll" title="التمرير التلقائي">↓</button>
-              <button class="ts-btn-xs" id="ac-log-copy" title="نسخ السجل">📋</button>
-              <button class="ts-btn-xs" id="ac-log-clear" title="مسح السجل">🗑</button>
+              <button class="ts-btn-xs" id="ac-log-copy" title="نسخ السجل">${icon('clipboard','ic-xs')}</button>
+              <button class="ts-btn-xs" id="ac-log-clear" title="مسح السجل">${icon('trash','ic-xs')}</button>
             </div>
           </div>
           <div class="ts-log" id="ac-log">${this._renderLog()}</div>
@@ -270,86 +272,233 @@ export class AccountCreatorManager {
     `;
   }
 
-  // ── Library card ─────────────────────────────────────────────────────────
-  _renderLibraryCard() {
-    const total = this.library.length;
+  // ── Library trigger button ────────────────────────────────────────────────
+  _renderLibraryTrigger() {
+    const count = this.library.length;
+    return `
+      <div class="ts-libbtn-wrap" style="margin-top:0;" id="ac-libbtn-wrap">
+        <button class="ts-libbtn ac-libbtn" id="ac-lib-open" type="button">
+          <span class="ts-libbtn-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </span>
+          <span class="ts-libbtn-text">
+            <span class="ts-libbtn-title">مكتبة الحسابات</span>
+            <span class="ts-libbtn-sub">الحسابات المنشأة · الإيميلات · التوكنات · كلمات المرور</span>
+          </span>
+          <span class="ts-libbtn-badges" id="ac-libbtn-badges">
+            ${count ? `<span class="ts-libbtn-badge mint">${count} حساب</span>` : ''}
+          </span>
+        </button>
+      </div>
+    `;
+  }
+
+  // ── Library overlay modal ─────────────────────────────────────────────────
+  _openLibraryModal() {
+    if (this._libModal) { this._refreshModalBody(); return; }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'ts-lib-overlay';
+    overlay.innerHTML = `
+      <div class="ts-lib-page">
+        <header class="ts-lib-page-head">
+          <button class="ts-lib-back" id="ac-lib-close" aria-label="رجوع">←</button>
+          <div class="ts-lib-page-title">مكتبة الحسابات</div>
+          <div class="ts-lib-head-actions">
+            <button class="ts-btn mint" id="ac-lib-modal-export">
+              ${icon('download','ic-xs')} تصدير JSON
+            </button>
+            <button class="ts-btn danger" id="ac-lib-modal-clear" ${!this.library.length ? 'disabled' : ''}>
+              ${icon('trash','ic-xs')} حذف الكل
+            </button>
+          </div>
+        </header>
+        <div class="ac-lib-modal-search-wrap">
+          ${icon('search')}
+          <input class="ts-input" id="ac-lib-modal-search" type="text"
+            placeholder="بحث بالإيميل أو الاسم أو userId…"
+            value="${escapeAttr(this._libSearch)}"
+            style="padding-right:36px;width:100%;">
+        </div>
+        <div class="ts-lib-page-body" id="ac-lib-modal-body"></div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    this._libModal = overlay;
+
+    overlay.querySelector('#ac-lib-close').addEventListener('click', () => this._closeLibraryModal());
+
+    overlay.querySelector('#ac-lib-modal-export')?.addEventListener('click', () => this._exportLibrary());
+
+    overlay.querySelector('#ac-lib-modal-clear')?.addEventListener('click', async () => {
+      if (!confirm('حذف جميع الحسابات من المكتبة؟ هذا الإجراء لا يمكن التراجع عنه.')) return;
+      try {
+        await window.electronAPI.acLibraryClear();
+        this.library = [];
+        this._libPage = 0;
+        this._refreshModalBody();
+        this._updateLibTriggerBadge();
+        showNotification('تم حذف جميع الحسابات', 'info');
+      } catch (e) { showNotification('فشل الحذف: ' + e.message, 'error'); }
+    });
+
+    const searchInput = overlay.querySelector('#ac-lib-modal-search');
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        this._libSearch = e.target.value;
+        this._libPage = 0;
+        this._refreshModalBody();
+      });
+    }
+
+    this._refreshModalBody();
+  }
+
+  _closeLibraryModal() {
+    if (this._libModal?.parentNode) {
+      this._libModal.parentNode.removeChild(this._libModal);
+    }
+    this._libModal = null;
+  }
+
+  _refreshModalBody() {
+    if (!this._libModal) return;
+    const body = this._libModal.querySelector('#ac-lib-modal-body');
+    if (!body) return;
+    body.innerHTML = this._renderAccountCards();
+    this._bindModalCards(body);
+  }
+
+  _renderAccountCards() {
     const filtered = this._filteredLib();
+    if (!filtered.length) {
+      return `<div class="ts-lib-empty">${this._libSearch ? 'لا نتائج — جرّب بحثاً مختلفاً' : 'لا توجد حسابات بعد — ابدأ الإنشاء'}</div>`;
+    }
     const totalPages = Math.ceil(filtered.length / this._libPageSize);
     const page = Math.max(0, Math.min(this._libPage, totalPages - 1));
     const slice = filtered.slice(page * this._libPageSize, (page + 1) * this._libPageSize);
 
-    return `
-      <div class="ts-card" id="ac-library-card">
-        <div class="ts-card-head">
-          <div class="ts-card-title ar">📋 مكتبة الحسابات (${total})</div>
-          <div style="display:flex;gap:6px;align-items:center;">
-            <button class="ts-btn mint" id="ac-lib-export">⬇ تصدير JSON</button>
-            ${total ? `<button class="ts-btn danger" id="ac-lib-clear">🗑 حذف الكل</button>` : ''}
+    const cards = slice.map((acc, i) => {
+      const idx = page * this._libPageSize + i + 1;
+      const date = acc.createdAt
+        ? new Date(acc.createdAt).toLocaleString('ar-SA', { dateStyle: 'short', timeStyle: 'short' })
+        : '—';
+      const initials = (acc.username || '?').slice(0, 2).toUpperCase();
+      const tokenShort = acc.token ? acc.token.slice(0, 24) + '…' : '—';
+      return `
+        <div class="ac-acc-card" data-acc-id="${escapeAttr(acc._id || '')}">
+          <div class="ac-acc-avatar">${escapeHtml(initials)}</div>
+          <div class="ac-acc-info">
+            <div class="ac-acc-username">${escapeHtml(acc.username || '—')}</div>
+            <div class="ac-acc-row">
+              <span class="ac-acc-label">email</span>
+              <span class="ac-acc-val">${escapeHtml(acc.email || '—')}</span>
+              <button class="ac-icon-btn ac-copy-btn" data-copy="${escapeAttr(acc.email || '')}" title="نسخ الإيميل">${icon('copy','ic-xs')}</button>
+            </div>
+            <div class="ac-acc-row">
+              <span class="ac-acc-label">pwd</span>
+              <span class="ac-pwd-hidden" style="color:var(--ts-muted)">••••••••</span>
+              <span class="ac-pwd-shown" style="display:none;color:var(--ts-text);font-family:monospace;font-size:12px;">${escapeHtml(acc.password || '—')}</span>
+              <button class="ac-icon-btn ac-show-pwd-btn" title="إظهار/إخفاء">${icon('eye','ic-xs')}</button>
+              <button class="ac-icon-btn ac-copy-btn" data-copy="${escapeAttr(acc.password || '')}" title="نسخ كلمة المرور">${icon('copy','ic-xs')}</button>
+            </div>
+            <div class="ac-acc-row">
+              <span class="ac-acc-label">token</span>
+              <span class="ac-acc-token" title="${escapeAttr(acc.token || '')}">${escapeHtml(tokenShort)}</span>
+              <button class="ac-icon-btn ac-copy-btn" data-copy="${escapeAttr(acc.token || '')}" title="نسخ التوكن">${icon('copy','ic-xs')}</button>
+            </div>
+            <div class="ac-acc-meta">
+              <span>${icon('mail','ic-xs')} ${escapeHtml(date)}</span>
+              ${acc.phone ? `<span>${icon('phone','ic-xs')} ${escapeHtml(acc.phone)}</span>` : ''}
+              <span style="margin-inline-start:auto;opacity:0.5">#${idx}</span>
+            </div>
           </div>
+          <button class="ac-acc-delete ts-btn danger xs" data-acc-id="${escapeAttr(acc._id || '')}" title="حذف">${icon('trash','ic-xs')}</button>
         </div>
+      `;
+    }).join('');
 
-        ${total === 0 ? `<div class="ts-rule-hint" style="padding:16px 0;">لا توجد حسابات بعد — ابدأ الإنشاء أعلاه</div>` : `
-          <div class="ac-lib-search-row">
-            <input class="ts-input" id="ac-lib-search" type="text" placeholder="🔍 بحث (إيميل / اسم / userId)..." value="${escapeAttr(this._libSearch)}" style="width:100%;">
-          </div>
+    const pagination = totalPages > 1 ? `
+      <div class="ac-lib-pagination" style="padding:16px;">
+        <button class="ts-btn-xs" id="ac-lib-modal-prev" ${page === 0 ? 'disabled' : ''}>→</button>
+        <span>${page + 1} / ${totalPages}</span>
+        <button class="ts-btn-xs" id="ac-lib-modal-next" ${page >= totalPages - 1 ? 'disabled' : ''}>←</button>
+      </div>` : '';
 
-          <div class="ac-lib-table-wrap">
-            <table class="ac-lib-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>الإيميل</th>
-                  <th>الاسم</th>
-                  <th>كلمة المرور</th>
-                  <th>Token</th>
-                  <th>الهاتف</th>
-                  <th>التاريخ</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                ${slice.length === 0 ? `<tr><td colspan="8" style="text-align:center;color:var(--ts-muted)">لا نتائج</td></tr>` :
-                  slice.map((acc, i) => {
-                    const idx = page * this._libPageSize + i + 1;
-                    const date = acc.createdAt ? new Date(acc.createdAt).toLocaleString('ar-SA', { dateStyle: 'short', timeStyle: 'short' }) : '—';
-                    const tokenShort = acc.token ? acc.token.slice(0, 12) + '…' : '—';
-                    return `<tr data-acc-id="${escapeAttr(acc._id || '')}">
-                      <td class="ac-lib-num">${idx}</td>
-                      <td class="ac-lib-email">
-                        <span>${escapeHtml(acc.email || '—')}</span>
-                        <button class="ac-copy-btn" data-copy="${escapeAttr(acc.email || '')}" title="نسخ">⧉</button>
-                      </td>
-                      <td>${escapeHtml(acc.username || '—')}</td>
-                      <td class="ac-lib-pwd">
-                        <span class="ac-pwd-hidden">••••••••</span>
-                        <span class="ac-pwd-shown" style="display:none;">${escapeHtml(acc.password || '—')}</span>
-                        <button class="ac-show-pwd-btn" title="إظهار">👁</button>
-                        <button class="ac-copy-btn" data-copy="${escapeAttr(acc.password || '')}" title="نسخ">⧉</button>
-                      </td>
-                      <td class="ac-lib-token">
-                        <span title="${escapeAttr(acc.token || '')}">${escapeHtml(tokenShort)}</span>
-                        <button class="ac-copy-btn" data-copy="${escapeAttr(acc.token || '')}" title="نسخ التوكن">⧉</button>
-                      </td>
-                      <td>${escapeHtml(acc.phone || '—')}</td>
-                      <td class="ac-lib-date">${date}</td>
-                      <td>
-                        <button class="ac-del-btn ts-btn danger xs" data-acc-id="${escapeAttr(acc._id || '')}" title="حذف">✕</button>
-                      </td>
-                    </tr>`;
-                  }).join('')}
-              </tbody>
-            </table>
-          </div>
+    return `<div class="ac-acc-list">${cards}</div>${pagination}`;
+  }
 
-          ${totalPages > 1 ? `
-          <div class="ac-lib-pagination">
-            <button class="ts-btn-xs" id="ac-lib-prev" ${page === 0 ? 'disabled' : ''}>→</button>
-            <span>${page + 1} / ${totalPages}</span>
-            <button class="ts-btn-xs" id="ac-lib-next" ${page >= totalPages - 1 ? 'disabled' : ''}>←</button>
-          </div>` : ''}
-        `}
-      </div>
-    `;
+  _bindModalCards(root) {
+    // Pagination
+    root.querySelector('#ac-lib-modal-prev')?.addEventListener('click', () => {
+      this._libPage = Math.max(0, this._libPage - 1);
+      this._refreshModalBody();
+    });
+    root.querySelector('#ac-lib-modal-next')?.addEventListener('click', () => {
+      this._libPage++;
+      this._refreshModalBody();
+    });
+
+    // Copy buttons
+    $all('.ac-copy-btn', root).forEach(btn => {
+      if (btn._bound) return;
+      btn._bound = true;
+      btn.addEventListener('click', async () => {
+        const text = btn.dataset.copy || '';
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          const orig = btn.innerHTML;
+          btn.innerHTML = icon('check','ic-xs');
+          btn.classList.add('copied');
+          setTimeout(() => { btn.innerHTML = orig; btn.classList.remove('copied'); }, 1200);
+        } catch (_) { showNotification('فشل النسخ', 'warn'); }
+      });
+    });
+
+    // Show/hide password
+    $all('.ac-show-pwd-btn', root).forEach(btn => {
+      if (btn._bound) return;
+      btn._bound = true;
+      btn.addEventListener('click', () => {
+        const row = btn.closest('.ac-acc-row');
+        const hidden = row?.querySelector('.ac-pwd-hidden');
+        const shown  = row?.querySelector('.ac-pwd-shown');
+        if (!hidden || !shown) return;
+        const visible = shown.style.display !== 'none';
+        hidden.style.display = visible ? '' : 'none';
+        shown.style.display  = visible ? 'none' : '';
+        btn.innerHTML = visible ? icon('eye','ic-xs') : icon('eye-off','ic-xs');
+      });
+    });
+
+    // Delete single account
+    $all('.ac-acc-delete', root).forEach(btn => {
+      if (btn._bound) return;
+      btn._bound = true;
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.accId;
+        if (!id) return;
+        try {
+          await window.electronAPI.acLibraryDelete(id);
+          this.library = this.library.filter(a => a._id !== id);
+          this._refreshModalBody();
+          this._updateLibTriggerBadge();
+        } catch (e) { showNotification('فشل الحذف: ' + e.message, 'error'); }
+      });
+    });
+  }
+
+  _updateLibTriggerBadge() {
+    const badges = $('#ac-libbtn-badges', this.contentArea);
+    if (!badges) return;
+    const count = this.library.length;
+    badges.innerHTML = count ? `<span class="ts-libbtn-badge mint">${count} حساب</span>` : '';
   }
 
   _filteredLib() {
@@ -363,13 +512,11 @@ export class AccountCreatorManager {
   }
 
   _refreshLibraryPanel() {
-    const card = $('#ac-library-card', this.contentArea);
-    if (!card) return;
-    const tmp = document.createElement('div');
-    tmp.innerHTML = this._renderLibraryCard();
-    const newCard = tmp.firstElementChild;
-    card.replaceWith(newCard);
-    this._bindLibrary(newCard);
+    // Update trigger badge
+    this._updateLibTriggerBadge();
+
+    // If modal is open, refresh its body too
+    if (this._libModal) this._refreshModalBody();
 
     // Also update library count in stats
     const statEls = $all('.ts-stat-value', this.contentArea);
@@ -424,7 +571,7 @@ export class AccountCreatorManager {
       if (sessionCard && !$('#ac-force-reset', sessionCard)) {
         const row = document.createElement('div');
         row.className = 'ts-force-reset-row';
-        row.innerHTML = `<button class="ts-btn warn" id="ac-force-reset">⚡ إعادة تعيين قسري</button>`;
+        row.innerHTML = `<button class="ts-btn warn" id="ac-force-reset">${icon('bolt','ic-xs')} إعادة تعيين قسري</button>`;
         sessionCard.appendChild(row);
         row.querySelector('#ac-force-reset')?.addEventListener('click', () => this._forceReset());
       }
@@ -463,9 +610,8 @@ export class AccountCreatorManager {
     $('#ac-email-save',   area)?.addEventListener('click', () => this._saveCustomEmail());
     $('#ac-proxy-save',   area)?.addEventListener('click', () => this._saveProxy());
 
-    // Library
-    const libCard = $('#ac-library-card', area);
-    if (libCard) this._bindLibrary(libCard);
+    // Library trigger button
+    $('#ac-lib-open', area)?.addEventListener('click', () => this._openLibraryModal());
 
     // Log toolbar
     $all('[data-ac-filter]', area).forEach(btn => {
@@ -512,85 +658,6 @@ export class AccountCreatorManager {
     }
   }
 
-  _bindLibrary(card) {
-    // Export button
-    $('#ac-lib-export', card)?.addEventListener('click', () => this._exportLibrary());
-
-    // Clear all
-    $('#ac-lib-clear', card)?.addEventListener('click', async () => {
-      if (!confirm('حذف جميع الحسابات من المكتبة؟ هذا الإجراء لا يمكن التراجع عنه.')) return;
-      try {
-        await window.electronAPI.acLibraryClear();
-        this.library = [];
-        this._libPage = 0;
-        this._refreshLibraryPanel();
-        showNotification('🗑 تم حذف جميع الحسابات', 'info');
-      } catch (e) { showNotification('❌ ' + e.message, 'error'); }
-    });
-
-    // Search
-    const searchInput = $('#ac-lib-search', card);
-    if (searchInput && !searchInput._bound) {
-      searchInput._bound = true;
-      searchInput.addEventListener('input', (e) => {
-        this._libSearch = e.target.value;
-        this._libPage = 0;
-        this._refreshLibraryPanel();
-      });
-    }
-
-    // Pagination
-    $('#ac-lib-prev', card)?.addEventListener('click', () => { this._libPage = Math.max(0, this._libPage - 1); this._refreshLibraryPanel(); });
-    $('#ac-lib-next', card)?.addEventListener('click', () => { this._libPage++; this._refreshLibraryPanel(); });
-
-    // Copy buttons
-    $all('.ac-copy-btn', card).forEach(btn => {
-      if (btn._bound) return;
-      btn._bound = true;
-      btn.addEventListener('click', async () => {
-        const text = btn.dataset.copy || '';
-        if (!text) return;
-        try {
-          await navigator.clipboard.writeText(text);
-          const orig = btn.textContent;
-          btn.textContent = '✓';
-          setTimeout(() => { btn.textContent = orig; }, 1000);
-        } catch (_) { showNotification('فشل النسخ', 'warn'); }
-      });
-    });
-
-    // Show/hide password
-    $all('.ac-show-pwd-btn', card).forEach(btn => {
-      if (btn._bound) return;
-      btn._bound = true;
-      btn.addEventListener('click', () => {
-        const row = btn.closest('td');
-        const hidden = row?.querySelector('.ac-pwd-hidden');
-        const shown  = row?.querySelector('.ac-pwd-shown');
-        if (!hidden || !shown) return;
-        const visible = shown.style.display !== 'none';
-        hidden.style.display = visible ? '' : 'none';
-        shown.style.display  = visible ? 'none' : '';
-        btn.textContent = visible ? '👁' : '🙈';
-      });
-    });
-
-    // Delete single account
-    $all('.ac-del-btn', card).forEach(btn => {
-      if (btn._bound) return;
-      btn._bound = true;
-      btn.addEventListener('click', async () => {
-        const id = btn.dataset.accId;
-        if (!id) return;
-        try {
-          await window.electronAPI.acLibraryDelete(id);
-          this.library = this.library.filter(a => a._id !== id);
-          this._refreshLibraryPanel();
-        } catch (e) { showNotification('❌ ' + e.message, 'error'); }
-      });
-    });
-  }
-
   // ── Actions ──────────────────────────────────────────────────────────────
   async _startSession() {
     const count = parseInt($('#ac-count', this.contentArea)?.value || '1') || 1;
@@ -599,21 +666,21 @@ export class AccountCreatorManager {
     try {
       const r = await window.electronAPI.acStart({ count, usernamePrefix: prefix });
       if (r?.success === false) throw new Error(r.error || 'Start failed');
-      showNotification('✅ بدأت جلسة إنشاء الحسابات', 'success');
+      showNotification('بدأت جلسة إنشاء الحسابات', 'success');
       if (r.snapshot) this.snapshot = r.snapshot;
       this._renderLive();
     } catch (e) {
-      showNotification('❌ ' + (e.message || 'Start failed'), 'error');
+      showNotification(e.message || 'Start failed', 'error');
     }
   }
 
   async _stopSession() {
     try {
       await window.electronAPI.acStop();
-      showNotification('⛔ جاري الإيقاف...', 'warn');
+      showNotification('جاري الإيقاف...', 'warn');
       this._renderLive();
     } catch (e) {
-      showNotification('❌ ' + (e.message || 'Stop failed'), 'error');
+      showNotification(e.message || 'Stop failed', 'error');
     }
   }
 
@@ -622,11 +689,11 @@ export class AccountCreatorManager {
       const r = await window.electronAPI.acForceReset();
       if (r?.success === false) throw new Error(r.error || 'Reset failed');
       if (r.snapshot) this.snapshot = r.snapshot;
-      showNotification('✅ تمت إعادة التعيين', 'success');
+      showNotification('تمت إعادة التعيين', 'success');
       this.render();
       this._bind();
     } catch (e) {
-      showNotification('❌ ' + (e.message || 'Reset failed'), 'error');
+      showNotification(e.message || 'Reset failed', 'error');
     }
   }
 
@@ -643,7 +710,7 @@ export class AccountCreatorManager {
     a.download = `discord-accounts-${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    showNotification(`✅ تم تصدير ${clean.length} حساب`, 'success');
+    showNotification(`تم تصدير ${clean.length} حساب`, 'success');
   }
 
   async _saveSmsKey() {
@@ -652,7 +719,7 @@ export class AccountCreatorManager {
     await this._quickSave({ smsApiKey: key });
     const input = $('#ac-sms-key', this.contentArea);
     if (input) input.value = '';
-    showNotification('✅ تم حفظ مفتاح SMS', 'success');
+    showNotification('تم حفظ مفتاح SMS', 'success');
     // Reload settings to update badge
     await this._loadAll();
     this.render();
@@ -663,13 +730,13 @@ export class AccountCreatorManager {
     const email = $('#ac-custom-email', this.contentArea)?.value?.trim();
     if (!email) { showNotification('أدخل الإيميل أولاً', 'warn'); return; }
     await this._quickSave({ customEmail: email });
-    showNotification('✅ تم حفظ الإيميل', 'success');
+    showNotification('تم حفظ الإيميل', 'success');
   }
 
   async _saveProxy() {
     const url = $('#ac-proxy-url', this.contentArea)?.value?.trim();
     await this._quickSave({ proxyUrl: url || '' });
-    showNotification(url ? '✅ تم حفظ البروكسي' : 'تم مسح البروكسي', url ? 'success' : 'info');
+    showNotification(url ? 'تم حفظ البروكسي' : 'تم مسح البروكسي', url ? 'success' : 'info');
   }
 
   async _quickSave(payload) {
