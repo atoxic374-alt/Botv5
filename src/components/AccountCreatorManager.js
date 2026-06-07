@@ -25,10 +25,13 @@ export class AccountCreatorManager {
     this._logFilter = 'all';
     this._logAutoScroll = true;
     this._inited = false;
-    this._libSearch = '';
-    this._libPage = 0;
+    this._libSearch   = '';
+    this._libPage     = 0;
     this._libPageSize = 20;
-    this._libModal = null;
+    this._libModal    = null;
+    this._joinResults = {};   // accId → { status, guild, detail }
+    this._joinCode    = '';
+    this._joinLoading = false;
   }
 
   // ── Init ────────────────────────────────────────────────────────────────
@@ -325,6 +328,15 @@ export class AccountCreatorManager {
             value="${escapeAttr(this._libSearch)}"
             style="padding-right:36px;width:100%;">
         </div>
+        <div class="ac-join-bar" id="ac-join-bar">
+          <input class="ts-input" id="ac-join-code" type="text"
+            placeholder="discord.gg/... أو رمز الدعوة"
+            value="${escapeAttr(this._joinCode)}"
+            autocomplete="off" spellcheck="false">
+          <button class="ts-btn mint" id="ac-join-all-btn">
+            ${icon('rocket','ic-xs')} دخّل الكل
+          </button>
+        </div>
         <div class="ts-lib-page-body" id="ac-lib-modal-body"></div>
       </div>
     `;
@@ -332,7 +344,6 @@ export class AccountCreatorManager {
     this._libModal = overlay;
 
     overlay.querySelector('#ac-lib-close').addEventListener('click', () => this._closeLibraryModal());
-
     overlay.querySelector('#ac-lib-modal-export')?.addEventListener('click', () => this._exportLibrary());
 
     overlay.querySelector('#ac-lib-modal-clear')?.addEventListener('click', async () => {
@@ -355,6 +366,15 @@ export class AccountCreatorManager {
         this._refreshModalBody();
       });
     }
+
+    const joinCodeInput = overlay.querySelector('#ac-join-code');
+    if (joinCodeInput) {
+      joinCodeInput.addEventListener('input', (e) => { this._joinCode = e.target.value; });
+    }
+
+    overlay.querySelector('#ac-join-all-btn')?.addEventListener('click', () => {
+      this._joinGuild(this._joinCode, 'all');
+    });
 
     this._refreshModalBody();
   }
@@ -416,6 +436,8 @@ export class AccountCreatorManager {
               <span>${icon('mail','ic-xs')} ${escapeHtml(date)}</span>
               ${acc.phone ? `<span>${icon('phone','ic-xs')} ${escapeHtml(acc.phone)}</span>` : ''}
               <span style="margin-inline-start:auto;opacity:0.5">#${idx}</span>
+              <button class="ac-join-card-btn ac-icon-btn" data-acc-id="${escapeAttr(acc._id || '')}" title="دخول سيرفر">${icon('rocket','ic-xs')}</button>
+              ${this._joinResults[acc._id] ? this._renderJoinBadge(this._joinResults[acc._id]) : ''}
             </div>
           </div>
           <button class="ac-acc-delete ts-btn danger xs" data-acc-id="${escapeAttr(acc._id || '')}" title="حذف">${icon('trash','ic-xs')}</button>
@@ -431,6 +453,65 @@ export class AccountCreatorManager {
       </div>` : '';
 
     return `<div class="ac-acc-list">${cards}</div>${pagination}`;
+  }
+
+  // ── Join Server helpers ───────────────────────────────────────────────────
+  _renderJoinBadge(result) {
+    const map = {
+      joined:         { cls: 'mint',   label: '✓ انضم' },
+      already_member: { cls: 'info',   label: 'عضو مسبقاً' },
+      invalid_token:  { cls: 'warn',   label: 'توكن منتهي' },
+      banned:         { cls: 'danger', label: 'محظور' },
+      invalid_invite: { cls: 'danger', label: 'دعوة خاطئة' },
+      max_guilds:     { cls: 'warn',   label: '+100 سيرفر' },
+      phone_required: { cls: 'warn',   label: 'يحتاج هاتف' },
+      rate_limited:   { cls: 'warn',   label: 'rate limit' },
+      no_token:       { cls: 'muted',  label: 'لا توكن' },
+      error:          { cls: 'danger', label: escapeHtml((result.detail || 'خطأ').slice(0, 28)) },
+    };
+    const m = map[result.status] || { cls: 'muted', label: escapeHtml(result.status || '?') };
+    return `<span class="ac-join-badge ${m.cls}">${m.label}</span>`;
+  }
+
+  async _joinGuild(code, accountIds) {
+    if (!code || !code.trim()) {
+      showNotification('أدخل رابط الدعوة أولاً', 'warn');
+      return;
+    }
+    if (this._joinLoading) return;
+    this._joinLoading = true;
+
+    const joinBtn = this._libModal?.querySelector('#ac-join-all-btn');
+    if (joinBtn) { joinBtn.disabled = true; joinBtn.textContent = 'جاري الانضمام…'; }
+
+    const count = accountIds === 'all' ? this.library.length : (Array.isArray(accountIds) ? accountIds.length : 1);
+    showNotification(`جاري انضمام ${count} حساب…`, 'info');
+
+    try {
+      const r = await window.electronAPI.acJoinGuild({ inviteCode: code, accountIds });
+      if (r?.success === false) throw new Error(r.error || 'فشل الانضمام');
+
+      for (const result of (r.results || [])) {
+        this._joinResults[result.id] = result;
+      }
+
+      const joined  = (r.results || []).filter(x => x.status === 'joined').length;
+      const already = (r.results || []).filter(x => x.status === 'already_member').length;
+      const failed  = (r.results || []).length - joined - already;
+      showNotification(
+        `انتهى — ${joined} انضم، ${already} عضو مسبقاً، ${failed} فشل`,
+        joined > 0 ? 'success' : 'warn'
+      );
+      this._refreshModalBody();
+    } catch (e) {
+      showNotification('فشل: ' + (e.message || 'خطأ غير معروف'), 'error');
+    } finally {
+      this._joinLoading = false;
+      if (joinBtn) {
+        joinBtn.disabled = false;
+        joinBtn.innerHTML = `${icon('rocket','ic-xs')} دخّل الكل`;
+      }
+    }
   }
 
   _bindModalCards(root) {
@@ -474,6 +555,19 @@ export class AccountCreatorManager {
         hidden.style.display = visible ? '' : 'none';
         shown.style.display  = visible ? 'none' : '';
         btn.innerHTML = visible ? icon('eye','ic-xs') : icon('eye-off','ic-xs');
+      });
+    });
+
+    // Per-card join button
+    $all('.ac-join-card-btn', root).forEach(btn => {
+      if (btn._bound) return;
+      btn._bound = true;
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.accId;
+        if (!id) return;
+        const code = this._libModal?.querySelector('#ac-join-code')?.value?.trim() || this._joinCode;
+        if (!code) { showNotification('أدخل رابط الدعوة أولاً', 'warn'); return; }
+        this._joinGuild(code, [id]);
       });
     });
 

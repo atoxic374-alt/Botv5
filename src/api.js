@@ -123,4 +123,5 @@ window.electronAPI = {
   acLibrary:       ()        => apiCall('GET',    '/api/ac/library'),
   acLibraryDelete: (id)      => apiCall('DELETE', `/api/ac/library/${encodeURIComponent(id)}`),
   acLibraryClear:  ()        => apiCall('DELETE', '/api/ac/library'),
+  acJoinGuild:     (payload) => apiCall('POST',   '/api/ac/join-guild', payload),
 };

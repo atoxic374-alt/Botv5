@@ -3620,6 +3620,81 @@ app.get('/api/features/stream', (req, res) => {
     ok(res, { deleted: true });
   });
 
+  // ── POST join-guild ───────────────────────────────────────────────────────
+  // Joins a Discord server using the stored token of each account.
+  // Body: { inviteCode: string, accountIds: string[] | 'all' }
+  app.post('/api/ac/join-guild', async (req, res) => {
+    const { inviteCode: rawCode, accountIds } = req.body || {};
+    if (!rawCode) return fail(res, new Error('رمز الدعوة مطلوب'));
+
+    // Parse invite code from full URL or raw code
+    const code = String(rawCode).trim()
+      .replace(/^https?:\/\/(www\.)?(discord\.gg|discord\.com\/invite)\//i, '')
+      .replace(/[?&#].*/g, '')
+      .trim();
+    if (!code || code.length < 2) return fail(res, new Error('رمز الدعوة غير صحيح'));
+
+    const library = acLibrary();
+    const targets = (!accountIds || accountIds === 'all')
+      ? library
+      : library.filter(a => (accountIds || []).includes(a._id));
+
+    if (!targets.length) return fail(res, new Error('لا توجد حسابات'));
+
+    const proxyUrl = (() => { try { return acEnsureSettings().proxyUrl || ''; } catch (_) { return ''; } })();
+
+    const results = [];
+    for (let i = 0; i < targets.length; i++) {
+      const acc = targets[i];
+      const r = await _acJoinGuild({ token: acc.token, code, proxyUrl });
+      results.push({ id: acc._id, username: acc.username, email: acc.email, ...r });
+      if (i < targets.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1200 + Math.random() * 1400));
+      }
+    }
+    ok(res, { code, results });
+  });
+
+  // Helper: join one Discord server with one user token
+  async function _acJoinGuild({ token, code, proxyUrl }) {
+    if (!token) return { status: 'no_token' };
+    try {
+      const client = ts.createClient(proxyUrl || '');
+      const r = await client.http.post(
+        `https://discord.com/api/v9/invites/${code}`,
+        {},
+        {
+          headers: {
+            'Authorization':      token,
+            'Content-Type':       'application/json',
+            'X-Super-Properties': client.superPropsB64,
+            'Origin':             'https://discord.com',
+            'Referer':            `https://discord.com/invite/${code}`,
+          },
+        }
+      );
+
+      if (r.status === 200) {
+        return { status: 'joined', guild: r.data?.guild?.name || '' };
+      }
+      if (r.status === 401) return { status: 'invalid_token' };
+      if (r.status === 403) return { status: 'banned' };
+      if (r.status === 429) return { status: 'rate_limited' };
+
+      const errCode = r.data?.code;
+      if (errCode === 40007) return { status: 'banned' };
+      if (errCode === 10006) return { status: 'invalid_invite' };
+      if (errCode === 30001) return { status: 'max_guilds' };
+      if (errCode === 40002) return { status: 'phone_required' };
+      if (r.data?.message?.toLowerCase().includes('already')) {
+        return { status: 'already_member', guild: r.data?.guild?.name || '' };
+      }
+      return { status: 'error', detail: (r.data?.message || `HTTP ${r.status}`).slice(0, 60) };
+    } catch (e) {
+      return { status: 'error', detail: (e.message || 'network error').slice(0, 60) };
+    }
+  }
+
   // ── POST start ────────────────────────────────────────────────────────────
   app.post('/api/ac/start', async (req, res) => {
     const s = acSession();
