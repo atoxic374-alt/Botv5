@@ -3734,31 +3734,19 @@ app.get('/api/features/stream', (req, res) => {
     const uid = currentUserId();
     ok(res, { snapshot: acSnapshot() });
 
-    // Build captcha resolver — mirrors buildSolveCaptcha() for account creation
+    // Build captcha resolver — uses the same battle-tested solvers used elsewhere.
+    // Critical for Discord: enterprise=1 + invisible=1 + userAgent are REQUIRED.
+    // The old inline 2Captcha code lacked these → Discord kept rejecting tokens.
     const captchaResolver = async ({ sitekey, rqdata, url }) => {
       const provider = (captchaSettings.provider || '2captcha').toLowerCase();
-
       if (provider === 'capsolver') {
         return await solveWithCapSolver({ apiKey: captchaKey, sitekey, pageUrl: url, rqdata });
       }
       if (provider === 'capmonster') {
         return await solveWithCapMonster({ apiKey: captchaKey, sitekey, pageUrl: url, rqdata });
       }
-      // Default: 2Captcha
-      const submitUrl = 'http://2captcha.com/in.php';
-      const pollUrl   = 'http://2captcha.com/res.php';
-      const payload = { key: captchaKey, method: 'hcaptcha', sitekey, pageurl: url || 'https://discord.com/register', json: 1 };
-      if (rqdata) payload.data = rqdata;
-      const sub = await axios.post(submitUrl, null, { params: payload, timeout: 15_000, validateStatus: () => true });
-      if (sub.data?.status !== 1) throw new Error('2Captcha submit failed: ' + JSON.stringify(sub.data));
-      const taskId = sub.data.request;
-      for (let i = 0; i < 36; i++) {
-        await new Promise(r => setTimeout(r, i === 0 ? 3000 : 4000));
-        const poll = await axios.get(pollUrl, { params: { key: captchaKey, action: 'get', id: taskId, json: 1 }, timeout: 10_000, validateStatus: () => true });
-        if (poll.data?.status === 1) return poll.data.request;
-        if (poll.data?.request !== 'CAPCHA_NOT_READY') throw new Error('2Captcha error: ' + poll.data?.request);
-      }
-      throw new Error('2Captcha timeout');
+      // 2Captcha — full implementation: enterprise=1, invisible=1, userAgent all included
+      return await solveWith2Captcha({ apiKey: captchaKey, sitekey, pageUrl: url, rqdata });
     };
 
     if (!smsSettings) acLog('info', '📵 SMS غير مُفعَّل — الإنشاء بدون رقم هاتف');
