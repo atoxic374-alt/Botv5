@@ -123,16 +123,19 @@ body::selection {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .page-container {
-  height: 100%;
+  position: absolute;
+  inset: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: clamp(12px, 2vw, 22px);
   padding-bottom: clamp(72px, 10vh, 118px);
   opacity: 0;
   transform: translateY(12px);
+  pointer-events: none;
   transition: opacity var(--transition-speed) var(--transition-smooth),
               transform var(--transition-speed) var(--transition-smooth);
 }
@@ -140,6 +143,7 @@ body::selection {
 .page-container.active {
   opacity: 1;
   transform: translateY(0);
+  pointer-events: auto;
 }
 
 .reload-banner {
