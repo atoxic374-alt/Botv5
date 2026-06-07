@@ -1,0 +1,202 @@
+/* ─── Account Creator — extra styles (shares ts-wrap / ts-card / ts-btn base) ─── */
+
+.ac-wrap {
+  /* Accent override: purple-blue vibe to visually distinguish from Bot Creator */
+  --ts-mint:      #a78bfa;
+  --ts-mint-2:    #8b5cf6;
+  --ts-mint-soft: rgba(167, 139, 250, 0.15);
+}
+
+.ac-wrap .ts-brand {
+  background: linear-gradient(160deg, #13102a 0%, #0e0c1e 100%);
+}
+.ac-wrap .ts-brand::after {
+  background: radial-gradient(1200px 100px at 80% 0%, rgba(167,139,250,0.10), transparent);
+}
+.ac-wrap .ts-brand-pulse {
+  background: var(--ts-mint);
+  box-shadow: 0 0 12px rgba(167,139,250,0.6);
+}
+.ac-wrap .ts-brand-name {
+  background: linear-gradient(90deg, #a78bfa, #c4b5fd);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Status classes for stat-value ── */
+.ac-wrap .ts-stat-value.running { color: var(--ts-mint); }
+.ac-wrap .ts-stat-value.done    { color: #34d399; }
+.ac-wrap .ts-stat-value.warn    { color: var(--ts-warn); }
+.ac-wrap .ts-stat-value.danger  { color: var(--ts-danger); }
+
+/* ── Badges ── */
+.ac-badge-ok {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(52, 211, 153, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  margin-inline-start: 6px;
+  vertical-align: middle;
+}
+.ac-badge-warn {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(240, 178, 50, 0.10);
+  color: var(--ts-warn);
+  border: 1px solid rgba(240, 178, 50, 0.28);
+  margin-inline-start: 6px;
+  vertical-align: middle;
+}
+
+/* ── Error hint below status ── */
+.ac-error-hint {
+  font-size: 10px;
+  color: var(--ts-danger);
+  opacity: 0.8;
+  margin-top: 3px;
+  word-break: break-all;
+}
+
+/* ── Log toolbar (same structure as ts-log-toolbar) ── */
+.ac-log-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(167,139,250,0.05);
+  border-bottom: 1px solid var(--ts-stroke);
+}
+
+/* ── Optional badge ── */
+.ac-optional-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: rgba(167,139,250,0.10);
+  color: var(--ts-mint);
+  border: 1px solid rgba(167,139,250,0.22);
+  margin-inline-start: 6px;
+  vertical-align: middle;
+}
+
+/* ── Library search row ── */
+.ac-lib-search-row {
+  padding: 10px 0 6px;
+}
+
+/* ── Library table ── */
+.ac-lib-table-wrap {
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid var(--ts-stroke);
+  margin-top: 6px;
+}
+.ac-lib-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.ac-lib-table thead th {
+  background: rgba(167,139,250,0.07);
+  color: var(--ts-muted);
+  font-weight: 600;
+  padding: 8px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--ts-stroke);
+  white-space: nowrap;
+}
+.ac-lib-table tbody tr {
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: background 0.15s;
+}
+.ac-lib-table tbody tr:last-child { border-bottom: none; }
+.ac-lib-table tbody tr:hover { background: rgba(167,139,250,0.05); }
+.ac-lib-table td {
+  padding: 7px 10px;
+  color: var(--ts-text);
+  vertical-align: middle;
+}
+.ac-lib-num {
+  color: var(--ts-muted);
+  font-size: 11px;
+  min-width: 28px;
+}
+.ac-lib-email { max-width: 180px; word-break: break-all; }
+.ac-lib-pwd   { min-width: 140px; }
+.ac-lib-token { font-family: monospace; font-size: 11px; max-width: 130px; }
+.ac-lib-date  { color: var(--ts-muted); font-size: 11px; white-space: nowrap; }
+
+/* Copy & show buttons */
+.ac-copy-btn, .ac-show-pwd-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--ts-muted);
+  font-size: 12px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+  vertical-align: middle;
+  margin-inline-start: 3px;
+}
+.ac-copy-btn:hover, .ac-show-pwd-btn:hover {
+  color: var(--ts-mint);
+  background: rgba(167,139,250,0.10);
+}
+.ac-del-btn.xs { padding: 2px 7px; font-size: 11px; }
+
+/* Password toggle */
+.ac-pwd-hidden, .ac-pwd-shown {
+  font-family: monospace;
+  letter-spacing: 1px;
+}
+
+/* Pagination */
+.ac-lib-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 0 4px;
+  font-size: 12px;
+  color: var(--ts-muted);
+}
+
+/* ── Tab nav (Account Creator page switcher) ── */
+.ac-tab-bar {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 12px;
+  border: 1px solid var(--ts-stroke);
+}
+.ac-tab-btn {
+  flex: 1;
+  padding: 8px 14px;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  color: var(--ts-muted);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.ac-tab-btn.active {
+  background: rgba(167,139,250,0.12);
+  color: var(--ts-mint);
+  border: 1px solid rgba(167,139,250,0.25);
+}
+.ac-tab-btn:hover:not(.active) {
+  background: rgba(255,255,255,0.05);
+  color: var(--ts-text);
+}
