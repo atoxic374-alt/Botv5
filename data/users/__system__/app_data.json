@@ -6,7 +6,10 @@
     "banner": null,
     "updatedAt": 0
   },
-  "tsCaptcha": {},
+  "tsCaptcha": {
+    "provider": "2captcha",
+    "apiKey": "v1:72dde39dfedc0a521037434c:4059a10e845f42cc7351d3782a89c684:52310215b80624b8831ffce06cca95dc4bc77161ef582243af9f0f106d14f53e"
+  },
   "tsBulkTokenCounter": 0,
   "tsBrightData": {},
   "acSettings": {},
