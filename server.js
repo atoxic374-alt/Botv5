@@ -8,6 +8,7 @@ const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const { scopedStore, currentUserId, userCtx, SYSTEM_UID } = require('./lib/userScope');
 const { encrypt, tryDecrypt } = require('./lib/crypto');
+function withUser(uid, fn) { return userCtx.run({ userId: uid }, fn); }
 const { testProxy } = require('./lib/proxy');
 
 const app = express();
