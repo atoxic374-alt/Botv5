@@ -1,10 +1,28 @@
 {
-  "tsAccounts": [],
+  "tsAccounts": [
+    {
+      "email": "ahmed827eu@gmail.com",
+      "password": "",
+      "totpSecret": "",
+      "directToken": "v1:96b2c2ab2809dced0af380ce:8afba31620f6ac817ba86559fa65dec0:9a3ad8645e85313a4a98449196d9986e6a7fe7b3a23e515291400ae98639b5615564ab0c7fb543a4150be3bf713ecb60a20684aa93841d334dadffeeb9739feb2eda8c876d5f2fb7",
+      "addedAt": 1781962562293,
+      "verify": {
+        "ok": true,
+        "status": "verified",
+        "message": "Account verified — no active rate-limit/lock detected",
+        "mfa": false,
+        "username": "di_e1",
+        "userId": "1033831422810669126",
+        "at": 1781962564537
+      }
+    }
+  ],
   "tsLastNumber": 0,
   "tsPfp": {
     "avatar": null,
     "banner": null,
     "updatedAt": 0
   },
-  "tsCaptcha": {}
+  "tsCaptcha": {},
+  "tsBulkTokenCounter": 0
 }
