@@ -2146,13 +2146,14 @@ const ts = require('./lib/trueStudio');
     const s = tsSession();
     const accountEmail = s.account;
 
-    // Signal cancellation to any running background task
-    s.cancelRequested = true;
-
-    // Immediately reset the entire session to a clean idle state
+    // Reset the entire session to a clean idle state, then signal cancellation.
+    // IMPORTANT: cancelRequested must be set AFTER Object.assign so it is not
+    // overwritten by the fresh session's default (false) — the background task
+    // checks s.cancelRequested after every await, so it must persist.
     const fresh = ts.makeSession();
     Object.assign(s, fresh);
     s.state = 'idle';
+    s.cancelRequested = true;
 
     // Clear the token cache for the stopped account so the next run
     // starts with a fresh login instead of a potentially stale session
@@ -3064,7 +3065,39 @@ const ts = require('./lib/trueStudio');
                   }
                 }
 
-              // ── 4) Any other unexpected error → try switching account once ───
+              // ── 4) 403 Forbidden — transient Discord anti-abuse, retry once ────
+              // Discord occasionally returns 403 on createApplication during an
+              // active session even on healthy accounts (bot-check cooldown).
+              // Wait briefly and retry before escalating to account-switch.
+              } else if (err?.code === 'FORBIDDEN' || err?.status === 403) {
+                tsLog('warn', `⚠️ 403 مؤقت على ${slot.name} [${currentEmail}] — انتظار 8s ثم إعادة المحاولة…`);
+                await tsSleep(8_000);
+                if (s.cancelRequested) { /* abort */ } else {
+                  try {
+                    const _f403Start = Date.now();
+                    const { appPayload: f403App, botToken: f403Tok } = await createOneBotAsync(
+                      slot.botIndex, slot.num, slot.name, teamIdSnapshot
+                    );
+                    const f403Dur = Date.now() - _f403Start;
+                    s.bots.push({ name: slot.name, appId: f403App.id, botUserId: f403App.bot?.id || null, token: f403Tok });
+                    s.done += 1; s.failed -= 1; botsThisAccount += 1;
+                    if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
+                    tsLog('success', `تم (403-retry): ${slot.name} ⚡ ${(f403Dur/1000).toFixed(1)}s`, { durationMs: f403Dur, appId: f403App.id, botName: slot.name });
+                    try {
+                      const _tkList = await botTokensStore.get() || [];
+                      const _tkF = _tkList.filter(t => t.appId !== f403App.id);
+                      _tkF.unshift({ appId: f403App.id, name: slot.name, icon: f403App.icon || null, token: f403Tok, email: currentEmail || '', resetAt: Date.now(), createdAt: Date.now() });
+                      await botTokensStore.set(_tkF);
+                    } catch (_) {}
+                    pushTsEvent('ts_bot_created', { bot: { name: slot.name, appId: f403App.id, hasToken: true, durationMs: f403Dur, isRetry: true } });
+                  } catch (_f403Err) {
+                    // 403 persisted on retry — escalate to account switch
+                    tsLog('warn', `⚡ 403 مستمر على ${slot.name} — التبديل للحساب البديل…`);
+                    await _switchAndRetry('forbidden-retry');
+                  }
+                }
+
+              // ── 5) Any other unexpected error → try switching account once ───
               } else {
                 tsLog('warn', `⚡ خطأ غير متوقع على ${slot.name} — محاولة التبديل للحساب البديل…`);
                 await _switchAndRetry('generic-error');
