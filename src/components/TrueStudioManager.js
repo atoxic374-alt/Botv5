@@ -1403,7 +1403,7 @@ export class TrueStudioManager {
               placeholder="${hasKey ? `•••••••••••• ${t('ts.captcha_key_set')}` : t('ts.captcha_key_ph')}"
               autocomplete="off" />
             <button class="ts-btn mint" id="ts-captcha-save">${escapeHtml(t('ts.save'))}</button>
-            ${hasKey ? `<button class="ts-btn" id="ts-captcha-verify" style="background:rgba(124,224,196,0.1);border:1px solid rgba(124,224,196,0.3);color:#7ce0c4;">${escapeHtml(t('ts.captcha_verify_btn'))}</button>` : ''}
+            <button class="ts-btn" id="ts-captcha-verify" style="background:rgba(124,224,196,0.1);border:1px solid rgba(124,224,196,0.3);color:#7ce0c4;">${escapeHtml(t('ts.captcha_verify_btn'))}</button>
             ${hasKey ? `<button class="ts-btn danger" id="ts-captcha-clear">${escapeHtml(t('ts.captcha_clear'))}</button>` : ''}
           </div>
           ${verifyPopup}
@@ -4098,10 +4098,19 @@ export class TrueStudioManager {
   }
 
   async verifyCaptchaKey() {
-    const btn = this.contentArea?.querySelector('#ts-captcha-verify');
+    const btn      = this.contentArea?.querySelector('#ts-captcha-verify');
+    const keyEl    = this.contentArea?.querySelector('#ts-captcha-key');
+    const provEl   = this.contentArea?.querySelector('#ts-captcha-provider');
     if (btn) { btn.textContent = '…'; btn.disabled = true; }
+    // Build payload — include the key typed in the field (if any) so the user
+    // can verify before saving. If the field is empty we fall back to the
+    // server's saved key (server side handles the fallback).
+    const payload = {};
+    const typedKey = (keyEl?.value || '').trim();
+    if (typedKey) payload.apiKey = typedKey;
+    if (provEl?.value) payload.provider = provEl.value;
     try {
-      const r = await window.electronAPI.tsCaptchaVerify();
+      const r = await window.electronAPI.tsCaptchaVerify(payload);
       if (!r || !r.success) throw new Error(r?.error || 'فشل التحقق');
       this._captchaVerifyResult = r;
     } catch (e) {

@@ -916,7 +916,7 @@ const ts = require('./lib/trueStudio');
   app.get('/api/ts/captcha-settings', (req, res) => {
     ok(res, { settings: tsCaptchaSettingsPublic() });
   });
-  app.post('/api/ts/captcha-settings', (req, res) => {
+  app.post('/api/ts/captcha-settings', async (req, res) => {
     const { provider, apiKey, manualFallback, clearKey } = req.body || {};
     const d = ensureData();
     if (!d.tsCaptcha || typeof d.tsCaptcha !== 'object') d.tsCaptcha = {};
@@ -934,15 +934,26 @@ const ts = require('./lib/trueStudio');
     }
     if (typeof manualFallback === 'boolean') d.tsCaptcha.manualFallback = manualFallback;
     writeData(d);
+    // Wait for the store to flush to disk before responding so the key is
+    // guaranteed persisted even if the server restarts immediately after.
+    try { await dataStore.flush(); } catch (_) {}
     ok(res, { settings: tsCaptchaSettingsPublic() });
   });
 
-  // Captcha key verification — checks balance and validity for the saved key.
-  app.get('/api/ts/captcha-verify', async (req, res) => {
-    const apiKey = tsCaptchaApiKey();
+  // Captcha key verification — checks balance and validity.
+  // Accepts an optional { apiKey, provider } body so the frontend can verify
+  // a key from the input field without saving it first. Falls back to the
+  // saved key when the body is empty.
+  app.post('/api/ts/captcha-verify', async (req, res) => {
     const settings = tsCaptchaSettings();
-    const provider = settings.provider || '2captcha';
-    if (!apiKey) return fail(res, new Error('لا يوجد API key محفوظ'));
+    const rawBody  = req.body || {};
+    const apiKey   = (typeof rawBody.apiKey === 'string' && rawBody.apiKey.trim())
+      ? rawBody.apiKey.trim()
+      : tsCaptchaApiKey();
+    const provider = (typeof rawBody.provider === 'string' && rawBody.provider)
+      ? rawBody.provider
+      : (settings.provider || '2captcha');
+    if (!apiKey) return fail(res, new Error('لا يوجد API key — أدخل المفتاح أولاً'));
     try {
       if (provider === 'capsolver') {
         const r = await axios.post('https://api.capsolver.com/getBalance',

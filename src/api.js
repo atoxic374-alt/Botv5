@@ -89,7 +89,7 @@ window.electronAPI = {
   tsExportUrl: (format = 'text') => `/api/ts/export?format=${encodeURIComponent(format)}`,
   tsCaptchaSettings: () => apiCall('GET', '/api/ts/captcha-settings'),
   tsSaveCaptchaSettings: (payload) => apiCall('POST', '/api/ts/captcha-settings', payload),
-  tsCaptchaVerify: () => apiCall('GET', '/api/ts/captcha-verify'),
+  tsCaptchaVerify: (payload) => apiCall('POST', '/api/ts/captcha-verify', payload || {}),
   tsResolveCaptcha: (id, token) =>
     apiCall('POST', `/api/ts/captcha-resolve/${encodeURIComponent(id)}`, { token }),
   tsCancelCaptcha: (id) => apiCall('POST', `/api/ts/captcha-cancel/${encodeURIComponent(id)}`),
