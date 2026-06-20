@@ -78,6 +78,7 @@ export class TrueStudioManager {
       await this._loadPfp();
       await this._loadAutoIntents();
       await this._loadProxySettings();
+      this._loadFormFromStorage();
       this.openSSE();
       this._startCountdownTicker();
       this._inited = true;
@@ -666,6 +667,40 @@ export class TrueStudioManager {
         proxyUrl:   this.form.proxyUrl || '',
         brightData: this.form.brightData || null,
       });
+    } catch (_) { /* non-fatal */ }
+  }
+
+  _saveFormToStorage() {
+    try {
+      const toSave = {
+        count:         this.form.count,
+        prefix:        this.form.prefix,
+        waitMinutes:   this.form.waitMinutes,
+        speed:         this.form.speed,
+        batchSize:     this.form.batchSize,
+        sessionBudget: this.form.sessionBudget,
+        rules:         this.form.rules,
+      };
+      localStorage.setItem('ts_form', JSON.stringify(toSave));
+    } catch (_) { /* non-fatal */ }
+  }
+
+  _loadFormFromStorage() {
+    try {
+      const raw = localStorage.getItem('ts_form');
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (typeof saved.count         === 'number') this.form.count         = saved.count;
+      if (typeof saved.prefix        === 'string') this.form.prefix        = saved.prefix;
+      if (typeof saved.waitMinutes   === 'number') this.form.waitMinutes   = saved.waitMinutes;
+      if (typeof saved.speed         === 'string') this.form.speed         = saved.speed;
+      if (typeof saved.batchSize     === 'number') this.form.batchSize     = saved.batchSize;
+      if (typeof saved.sessionBudget === 'number') this.form.sessionBudget = saved.sessionBudget;
+      if (saved.rules && typeof saved.rules === 'object') {
+        if (typeof saved.rules.createTeams === 'boolean') this.form.rules.createTeams = saved.rules.createTeams;
+        if (typeof saved.rules.createBots  === 'boolean') this.form.rules.createBots  = saved.rules.createBots;
+        if (typeof saved.rules.linkBots    === 'boolean') this.form.rules.linkBots    = saved.rules.linkBots;
+      }
     } catch (_) { /* non-fatal */ }
   }
 
@@ -3620,6 +3655,7 @@ export class TrueStudioManager {
     $('#ts-bulk-delete')?.addEventListener('click', () => this.deleteBulkTokens());
     $('#ts-session-budget')?.addEventListener('input', (e) => {
       this.form.sessionBudget = Math.max(0, Math.min(500, parseInt(e.target.value) || 0));
+      this._saveFormToStorage();
     });
 
     this.contentArea.querySelectorAll('[data-toggle]').forEach(el => {
@@ -3630,15 +3666,21 @@ export class TrueStudioManager {
         el.classList.toggle('on');
         el.setAttribute('aria-checked', String(this.form.rules[key]));
         this._updateRuleFieldStates();
+        this._saveFormToStorage();
       });
     });
 
     $('#ts-count')?.addEventListener('input', (e) => {
       this.form.count = Math.max(1, Math.min(50, parseInt(e.target.value) || 1));
+      this._saveFormToStorage();
     });
-    $('#ts-prefix')?.addEventListener('input', (e) => this.form.prefix = e.target.value);
+    $('#ts-prefix')?.addEventListener('input', (e) => {
+      this.form.prefix = e.target.value;
+      this._saveFormToStorage();
+    });
     $('#ts-wait')?.addEventListener('input', (e) => {
       this.form.waitMinutes = Math.max(0, Math.min(60, parseInt(e.target.value) || 0));
+      this._saveFormToStorage();
     });
 
     // Speed pills (radio buttons)
@@ -3648,6 +3690,7 @@ export class TrueStudioManager {
         this.contentArea.querySelectorAll('.ts-speed-pill').forEach(p => {
           p.classList.toggle('active', p.querySelector('input')?.value === this.form.speed);
         });
+        this._saveFormToStorage();
       });
     });
 
@@ -3699,6 +3742,7 @@ export class TrueStudioManager {
     // Batch size selector (shown when IP rotation is active)
     $('#ts-batch-size')?.addEventListener('change', (e) => {
       this.form.batchSize = Math.max(1, Math.min(5, parseInt(e.target.value) || 1));
+      this._saveFormToStorage();
     });
 
     // ── Quick Setup toggle button ────────────────────────────────────
@@ -3720,6 +3764,7 @@ export class TrueStudioManager {
         this.form.speed     = preset.speed;
         this._bdPreset      = preset.id;
         this._quickSetupOpen = false;
+        this._saveFormToStorage();
         this.render();
         showNotification(`تم تطبيق إعدادات ${preset.name} — أدخل Zone Name وPassword`, 'success');
       });
