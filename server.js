@@ -15,13 +15,6 @@ app.set('trust proxy', 1);
 const PORT = Number(process.env.PORT || 5000);
 const BUILD_STAMP = String(Date.now());
 
-// Run an async fn inside a specific user's AsyncLocalStorage context.
-// Equivalent to userCtx.run({ userId: uid }, fn) — used for background tasks
-// that need to stay bound to the originating user after the request ends.
-function withUser(uid, fn) {
-  return userCtx.run({ userId: uid || SYSTEM_UID }, fn);
-}
-
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
@@ -198,17 +191,6 @@ const ts = require('./lib/trueStudio');
     sseBroadcast(type, { ...payload, snapshot: tsSnapshot(), _uid: currentUserId() });
   }
 
-  function clearPendingTsCaptcha(reason = 'Session stopped') {
-    const s = tsSession();
-    if (!s.pendingCaptcha) return false;
-    const ch = s.pendingCaptcha;
-    s.pendingCaptcha = null;
-    if (ch.timer) clearTimeout(ch.timer);
-    try { ch.reject(new Error(reason)); } catch (_) {}
-    pushTsEvent('ts_captcha_cancelled', { id: ch.id, reason });
-    return true;
-  }
-
   // ── Account storage (per-user, encrypted at rest) ───────────────
   function tsAccountsRaw() {
     const d = ensureData();
@@ -343,16 +325,6 @@ const ts = require('./lib/trueStudio');
       safetyMs: 900,
       onWait: async ({ phase, reason, waitMs, route, bucket, scope }) => {
         const s = tsSession();
-        if (reason === 'local_pacing') {
-          if (phase === 'start' && waitMs >= 1000) {
-            const now = Date.now();
-            if (now - lastLogAt > 5000) {
-              lastLogAt = now;
-              tsLog('info', `${accountKey || 'account'} تنظيم طلبات داخلي: انتظار ${Math.ceil(waitMs / 1000)}s (${label})`);
-            }
-          }
-          return;
-        }
         if (phase === 'start' && waitMs > 0) {
           const prevState = s.state;
           s.waitUntilTs = Date.now() + waitMs;
@@ -472,88 +444,6 @@ const ts = require('./lib/trueStudio');
 
   function isTsAccountQueued(email) {
     return _tsAccountQueues.has(accountQueueKey(email));
-  }
-
-  // ── Bright Data settings (per-user, encrypted at rest) ──────────
-  // Stores Customer ID, Zone name, Zone password, and protocol persistently
-  // so users don't have to re-enter credentials every session.
-  function tsBrightDataSettings() {
-    const d = ensureData();
-    if (!d.tsBrightData || typeof d.tsBrightData !== 'object') d.tsBrightData = {};
-    return d.tsBrightData;
-  }
-  function tsBrightDataSettingsPublic() {
-    const b = tsBrightDataSettings();
-    return {
-      enabled:      b.enabled === true,
-      customerId:   b.customerId || '',
-      zoneName:     b.zoneName || '',
-      hasPassword:  !!b.zonePassword,
-      protocol:     b.protocol || 'http',
-      batchSize:    typeof b.batchSize === 'number' ? b.batchSize : 3,
-      speed:        b.speed || 'veryfast',
-    };
-  }
-  function tsBrightDataPassword() {
-    const b = tsBrightDataSettings();
-    if (!b.zonePassword) return '';
-    return tryDecrypt(b.zonePassword) || b.zonePassword || '';
-  }
-
-  function parseBrightDataUsername(value) {
-    const raw = String(value || '').trim();
-    if (!raw) return null;
-    const userPart = (() => {
-      try {
-        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return decodeURIComponent(new URL(raw).username || '');
-      } catch (_) {}
-      return decodeURIComponent(raw.split(':')[0] || raw);
-    })();
-    const match = userPart.match(/^brd-customer-(.+?)-zone-(.+)$/i);
-    if (!match) return null;
-    const zoneWithFlags = match[2] || '';
-    const flagMatch = zoneWithFlags.match(/^(.*?)(?:-(?:session|country|ip|asn|gip|route_err|direct)\b.*)?$/i);
-    return {
-      customerId: match[1],
-      zoneName: (flagMatch?.[1] || zoneWithFlags).replace(/-$/, ''),
-    };
-  }
-
-  function cleanBrightDataPart(value, kind) {
-    let v = String(value || '').trim();
-    if (!v) return '';
-    try { v = decodeURIComponent(v); } catch (_) {}
-    if (kind === 'customer') {
-      const parsed = parseBrightDataUsername(v);
-      if (parsed?.customerId) return parsed.customerId;
-      return v.replace(/^brd-customer-/i, '').replace(/-zone-.+$/i, '');
-    }
-    const parsed = parseBrightDataUsername(v);
-    if (parsed?.zoneName) return parsed.zoneName;
-    return v.replace(/^zone-/i, '');
-  }
-
-  function resolveBrightDataConfig(input = {}, { useSavedPassword = false, useSavedFields = false } = {}) {
-    const saved = tsBrightDataSettings();
-    const src = input && typeof input === 'object' ? input : {};
-    const enabled = src.enabled === true || (useSavedFields && saved.enabled === true);
-    if (!enabled) return null;
-
-    const parsedCustomer = parseBrightDataUsername(src.customerId);
-    const parsedZone = parseBrightDataUsername(src.zoneName);
-    const customerId = cleanBrightDataPart(
-      parsedZone?.customerId || parsedCustomer?.customerId || src.customerId || (useSavedFields ? saved.customerId : ''),
-      'customer',
-    );
-    const zoneName = cleanBrightDataPart(
-      parsedZone?.zoneName || src.zoneName || parsedCustomer?.zoneName || (useSavedFields ? saved.zoneName : ''),
-      'zone',
-    );
-    const zonePassword = String(src.zonePassword || (useSavedPassword ? tsBrightDataPassword() : '') || '');
-    const protocol = src.protocol === 'socks5h' || (useSavedFields && saved.protocol === 'socks5h') ? 'socks5h' : 'http';
-
-    if (!customerId || !zoneName || !zonePassword) return null;
-    return { customerId, zoneName, zonePassword, protocol };
   }
 
   // ── Captcha settings (per-user, encrypted) ─────────────────────
@@ -802,9 +692,8 @@ const ts = require('./lib/trueStudio');
       const TIMEOUT_MS       = 160_000; // 160 s (hCaptcha typical: 15-90 s)
       const startedAt        = Date.now();
 
-      // Initial wait: 3 s for hCaptcha (docs say 5 s but Discord challenges
-      // often resolve in ~15-20 s total so shaving 2 s helps noticeably).
-      await new Promise(r => setTimeout(r, 3_000));
+      // Initial wait: 5 s for hCaptcha (2captcha docs; 20 s is only for reCAPTCHA).
+      await new Promise(r => setTimeout(r, 5_000));
 
       while (Date.now() - startedAt < TIMEOUT_MS) {
         const res = await axios.get('https://2captcha.com/res.php', {
@@ -984,48 +873,38 @@ const ts = require('./lib/trueStudio');
       const apiKey   = tsCaptchaApiKey();
       const provider = settings.provider || '2captcha';
 
-      // Signal to _withBotTimeout that an auto-captcha is in progress so its
-      // countdown pauses — same protection already in place for manual captchas.
-      const s = tsSession();
-      s.autoCaptchaCount = (s.autoCaptchaCount || 0) + 1;
-
-      try {
-        if (apiKey && provider === 'capsolver') {
-          try {
-            tsLog('info', 'محاولة حل الكابتشا تلقائياً عبر CapSolver…');
-            const token = await solveWithCapSolver({ apiKey, sitekey, pageUrl: url, rqdata, rqtoken });
-            if (token) { tsLog('success', 'تم حل الكابتشا عبر CapSolver ✓'); return token; }
-          } catch (e) { tsLog('warn', 'CapSolver فشل: ' + (e.message || e)); }
-        }
-
-        if (apiKey && provider === 'capmonster') {
-          try {
-            tsLog('info', 'محاولة حل الكابتشا تلقائياً عبر CapMonster…');
-            const token = await solveWithCapMonster({ apiKey, sitekey, pageUrl: url, rqdata });
-            if (token) { tsLog('success', 'تم حل الكابتشا عبر CapMonster ✓'); return token; }
-          } catch (e) { tsLog('warn', 'CapMonster فشل: ' + (e.message || e)); }
-        }
-
-        if (apiKey && provider === '2captcha') {
-          try {
-            tsLog('info', 'محاولة حل الكابتشا تلقائياً عبر 2Captcha…');
-            const token = await solveWith2Captcha({ apiKey, sitekey, pageUrl: url, rqdata });
-            if (token) { tsLog('success', 'تم حل الكابتشا عبر 2Captcha ✓'); return token; }
-          } catch (e) { tsLog('warn', '2Captcha فشل: ' + (e.message || e)); }
-        }
-
-        if (apiKey || settings.manualFallback === false) {
-          throw new Error(
-            apiKey
-              ? 'الحل التلقائي فشل ولا يوجد رجوع يدوي عند وجود API key — تحقق من رصيدك أو صحة المفتاح'
-              : 'No automatic solver succeeded and manual fallback is disabled'
-          );
-        }
-        return await solveCaptchaManual({ sitekey, service, rqdata, rqtoken, url, context });
-      } finally {
-        // Always decrement, even on error — never leave the counter stuck.
-        s.autoCaptchaCount = Math.max(0, (s.autoCaptchaCount || 1) - 1);
+      if (apiKey && provider === 'capsolver') {
+        try {
+          tsLog('info', 'محاولة حل الكابتشا تلقائياً عبر CapSolver…');
+          const token = await solveWithCapSolver({ apiKey, sitekey, pageUrl: url, rqdata, rqtoken });
+          if (token) { tsLog('success', 'تم حل الكابتشا عبر CapSolver ✓'); return token; }
+        } catch (e) { tsLog('warn', 'CapSolver فشل: ' + (e.message || e)); }
       }
+
+      if (apiKey && provider === 'capmonster') {
+        try {
+          tsLog('info', 'محاولة حل الكابتشا تلقائياً عبر CapMonster…');
+          const token = await solveWithCapMonster({ apiKey, sitekey, pageUrl: url, rqdata });
+          if (token) { tsLog('success', 'تم حل الكابتشا عبر CapMonster ✓'); return token; }
+        } catch (e) { tsLog('warn', 'CapMonster فشل: ' + (e.message || e)); }
+      }
+
+      if (apiKey && provider === '2captcha') {
+        try {
+          tsLog('info', 'محاولة حل الكابتشا تلقائياً عبر 2Captcha…');
+          const token = await solveWith2Captcha({ apiKey, sitekey, pageUrl: url, rqdata });
+          if (token) { tsLog('success', 'تم حل الكابتشا عبر 2Captcha ✓'); return token; }
+        } catch (e) { tsLog('warn', '2Captcha فشل: ' + (e.message || e)); }
+      }
+
+      if (apiKey || settings.manualFallback === false) {
+        throw new Error(
+          apiKey
+            ? 'الحل التلقائي فشل ولا يوجد رجوع يدوي عند وجود API key — تحقق من رصيدك أو صحة المفتاح'
+            : 'No automatic solver succeeded and manual fallback is disabled'
+        );
+      }
+      return await solveCaptchaManual({ sitekey, service, rqdata, rqtoken, url, context });
     };
   }
 
@@ -1054,41 +933,6 @@ const ts = require('./lib/trueStudio');
     if (typeof manualFallback === 'boolean') d.tsCaptcha.manualFallback = manualFallback;
     writeData(d);
     ok(res, { settings: tsCaptchaSettingsPublic() });
-  });
-
-  // Bright Data settings — view / save persistent proxy credentials
-  app.get('/api/ts/brightdata-settings', (req, res) => {
-    ok(res, { settings: tsBrightDataSettingsPublic() });
-  });
-  app.post('/api/ts/brightdata-settings', (req, res) => {
-    const { enabled, customerId, zoneName, zonePassword, clearPassword, protocol, batchSize, speed } = req.body || {};
-    const d = ensureData();
-    if (!d.tsBrightData || typeof d.tsBrightData !== 'object') d.tsBrightData = {};
-    if (typeof enabled === 'boolean') d.tsBrightData.enabled = enabled;
-    const parsedCustomer = typeof customerId === 'string' ? parseBrightDataUsername(customerId) : null;
-    const parsedZone = typeof zoneName === 'string' ? parseBrightDataUsername(zoneName) : null;
-    if (typeof customerId === 'string') {
-      d.tsBrightData.customerId = cleanBrightDataPart(parsedCustomer?.customerId || customerId, 'customer');
-      if (parsedCustomer?.zoneName && typeof zoneName !== 'string') d.tsBrightData.zoneName = parsedCustomer.zoneName;
-    }
-    if (typeof zoneName === 'string') {
-      if (parsedZone?.customerId && !d.tsBrightData.customerId) d.tsBrightData.customerId = parsedZone.customerId;
-      d.tsBrightData.zoneName = cleanBrightDataPart(parsedZone?.zoneName || zoneName, 'zone');
-    }
-    if (clearPassword === true) {
-      d.tsBrightData.zonePassword = '';
-    } else if (typeof zonePassword === 'string' && zonePassword) {
-      d.tsBrightData.zonePassword = encrypt(zonePassword);
-    }
-    if (typeof protocol === 'string' && (protocol === 'http' || protocol === 'socks5h')) {
-      d.tsBrightData.protocol = protocol;
-    }
-    if (typeof batchSize === 'number' && batchSize >= 1 && batchSize <= 5) {
-      d.tsBrightData.batchSize = batchSize;
-    }
-    if (typeof speed === 'string') d.tsBrightData.speed = speed;
-    writeData(d);
-    ok(res, { settings: tsBrightDataSettingsPublic() });
   });
 
   // Captcha key verification — checks balance and validity for the saved key.
@@ -1163,8 +1007,12 @@ const ts = require('./lib/trueStudio');
     if (!s.pendingCaptcha || s.pendingCaptcha.id !== id) {
       return ok(res, { snapshot: tsSnapshot() });
     }
-    clearPendingTsCaptcha('Captcha cancelled by user');
+    const ch = s.pendingCaptcha;
+    s.pendingCaptcha = null;
+    if (ch.timer) clearTimeout(ch.timer);
     tsLog('warn', 'تم إلغاء الكابتشا — الجلسة ستفشل');
+    try { ch.reject(new Error('Captcha cancelled by user')); } catch {}
+    pushTsEvent('ts_captcha_cancelled', { id });
     pushTsEvent('ts_progress');
     ok(res, { snapshot: tsSnapshot() });
   });
@@ -1844,136 +1692,14 @@ const ts = require('./lib/trueStudio');
 
   // ── Proxy verification ──────────────────────────────────────────────────
   // Tests that a proxy URL is reachable and returns the egress IP.
-  // required:true  = must pass for bot-creation to work
-  // required:false = optional (not needed for creating bots)
-  // Only discord.com endpoints are truly required — everything else is optional.
-  const TS_PROXY_PREFLIGHT_TARGETS = [
-    // discord.com/login is the reliable required check — works even on "Limited Access" BrightData plans.
-    // /api/ paths are blocked by BrightData robots.txt enforcement on Limited Access plans;
-    // however WebSocket (bot) connections bypass this since they're not HTTP crawl requests.
-    { id: 'discord-login',   label: 'Discord (login page)',  url: 'https://discord.com/login',              required: true  },
-    { id: 'discord-api',     label: 'Discord API (/api)',    url: 'https://discord.com/api/v10/gateway',    required: false },
-    { id: 'discordapp',      label: 'Discord (legacy)',      url: 'https://discordapp.com',                 required: false },
-    { id: 'cdn-discordapp',  label: 'Discord CDN (avatars)', url: 'https://cdn.discordapp.com',             required: false },
-    { id: 'media-discordapp',label: 'Discord media CDN',     url: 'https://media.discordapp.net',           required: false },
-  ];
-
-  async function runBrightDataPreflight(bd, { testCount = 3 } = {}) {
-    const checks = [];
-    const rotationChecks = [];
-    const rotationCount = Math.max(1, Math.min(5, Number(testCount || 3)));
-
-    // Rotation check: use discord.com/login — proves Discord is reachable + IP rotation.
-    // We avoid /api/ paths here because "Limited Access" BrightData plans may block them.
-    for (let i = 0; i < rotationCount; i++) {
-      const sessionId = 'preflight_rot_' + Date.now().toString(36) + '_' + i + '_' + Math.random().toString(36).slice(2, 6);
-      try {
-        const result = await testProxy(buildBrightDataUrl(bd, sessionId), {
-          targetUrl: 'https://discord.com/login',
-          timeoutMs: 12000,
-          insecureSkipTlsVerify: true,
-          acceptStatus: (s) => s >= 100 && s < 600,
-        });
-        rotationChecks.push({ ok: true, ip: result.ip || null, country: result.country || null, status: result.status || null, sessionId });
-      } catch (e) {
-        rotationChecks.push({ ok: false, ip: null, country: null, error: e.message || String(e), sessionId });
-      }
-    }
-
-    // Target checks — run only required targets + a sample of optional ones in parallel.
-    await Promise.all(TS_PROXY_PREFLIGHT_TARGETS.map(async (target, idx) => {
-      const sessionId = 'preflight_target_' + idx + '_' + Math.random().toString(36).slice(2, 6);
-      try {
-        const result = await testProxy(buildBrightDataUrl(bd, sessionId), {
-          targetUrl: target.url,
-          timeoutMs: 12000,
-          insecureSkipTlsVerify: true,
-          acceptStatus: (status) => status >= 100 && status < 600,
-        });
-        checks[idx] = { ...target, ok: true, status: result.status || null, ip: result.ip || null, country: result.country || null };
-      } catch (e) {
-        checks[idx] = { ...target, ok: false, error: e.message || String(e) };
-      }
-    }));
-
-    const okRotation = rotationChecks.filter(c => c.ok);
-    const uniqueRotation = Array.from(new Set(okRotation.map(c => c.ip || c.country || '').filter(Boolean)));
-    // Only fail if a REQUIRED target fails — optional failures are just warnings.
-    const failedRequired = checks.filter(c => c.required && !c.ok);
-    // If all rotation checks failed, that's also a hard failure.
-    const rotationFailed = okRotation.length === 0;
-    return {
-      ok: !rotationFailed && failedRequired.length === 0,
-      rotation: {
-        ok: okRotation.length > 0,
-        checks: rotationChecks,
-        testedSessions: rotationChecks.length,
-        uniqueCount: uniqueRotation.length,
-        rotationLikely: uniqueRotation.length > 1,
-      },
-      targets: checks,
-      failedTargets: failedRequired,
-    };
-  }
-
   app.post('/api/ts/proxy-verify', async (req, res) => {
-    const { proxyUrl, brightData } = req.body || {};
-    let url = typeof proxyUrl === 'string' ? proxyUrl.trim() : '';
-    if (!url && brightData?.enabled) {
-      const bd = resolveBrightDataConfig(brightData, { useSavedPassword: true, useSavedFields: true });
-      if (!bd) return ok(res, { ok: false, ip: null, error: 'Bright Data settings are incomplete' });
-      const testCount = Math.max(1, Math.min(5, Number(req.body?.testCount || 3)));
-      const checks = [];
-      for (let i = 0; i < testCount; i++) {
-        const sessionId = 'test_' + Date.now().toString(36) + '_' + i + '_' + Math.random().toString(36).slice(2, 6);
-        const testUrl = buildBrightDataUrl(bd, sessionId);
-        try {
-          const result = await testProxy(testUrl);
-          checks.push({ ok: true, ip: result.ip || null, country: result.country || null, sessionId });
-        } catch (e) {
-          checks.push({ ok: false, ip: null, error: e.message || String(e), sessionId });
-        }
-      }
-      const okChecks = checks.filter(c => c.ok);
-      const uniqueIps = Array.from(new Set(okChecks.map(c => c.ip).filter(Boolean)));
-      const uniqueLocations = Array.from(new Set(okChecks.map(c => c.ip || c.country || '').filter(Boolean)));
-      return ok(res, {
-        ok: okChecks.length > 0,
-        ip: okChecks[0]?.ip || null,
-        ips: checks,
-        uniqueIpCount: uniqueIps.length,
-        uniqueLocationCount: uniqueLocations.length,
-        testedSessions: checks.length,
-        rotationLikely: uniqueIps.length > 1 || uniqueLocations.length > 1,
-        error: okChecks.length ? null : (checks.find(c => c.error)?.error || 'Bright Data proxy test failed'),
-      });
-    }
-    if (!url) return fail(res, new Error('proxyUrl is required'));
+    const { proxyUrl } = req.body || {};
+    if (!proxyUrl) return fail(res, new Error('proxyUrl is required'));
     try {
-      const result = await testProxy(url);
-      ok(res, {
-        ok: result.ok,
-        ip: result.ip || null,
-        country: result.country || null,
-        targetUrl: result.targetUrl || null,
-        error: result.error || null,
-      });
+      const result = await testProxy(String(proxyUrl).trim());
+      ok(res, { ok: result.ok, ip: result.ip || null, error: result.error || null });
     } catch (e) {
       ok(res, { ok: false, ip: null, error: e.message || String(e) });
-    }
-  });
-
-  app.post('/api/ts/proxy-preflight', async (req, res) => {
-    try {
-      const bd = resolveBrightDataConfig(req.body?.brightData || { enabled: true }, {
-        useSavedPassword: true,
-        useSavedFields: true,
-      });
-      if (!bd) return ok(res, { ok: false, error: 'Bright Data settings are incomplete — احفظ Customer/Zone/Password أولاً' });
-      const result = await runBrightDataPreflight(bd, { testCount: req.body?.testCount || 3 });
-      ok(res, result);
-    } catch (e) {
-      ok(res, { ok: false, error: e.message || String(e) });
     }
   });
 
@@ -2363,11 +2089,7 @@ const ts = require('./lib/trueStudio');
       return ok(res, { snapshot: tsSnapshot() });
     }
     s.cancelRequested = true;
-    clearPendingTsCaptcha('Session stopped by user');
-    s.waitUntilTs = 0;
-    s.waitTotalMs = 0;
-    s.current = '';
-    tsLog('warn', 'تم طلب إيقاف الجلسة — سيتم إغلاق أي عملية معلقة بأقرب نقطة آمنة…');
+    tsLog('warn', 'إيقاف الجلسة قيد التنفيذ…');
     pushTsEvent('ts_progress');
     ok(res, { snapshot: tsSnapshot() });
   });
@@ -2379,39 +2101,10 @@ const ts = require('./lib/trueStudio');
     ok(res, { snapshot: tsSnapshot() });
   });
 
-  // Force-reset: nukes any stale queue + session state → returns to idle.
-  // Use when the UI appears stuck after a rate-limit or crash.
-  app.post('/api/ts/force-reset', (req, res) => {
-    const email = String(req.body?.email || '').trim().toLowerCase();
-    const s = tsSession();
-    // Signal any in-flight job to stop ASAP
-    s.cancelRequested = true;
-    clearPendingTsCaptcha('Force reset by user');
-    // Clear account queue for this email (zombie entries from previous session)
-    if (email) {
-      const key = accountQueueKey(email);
-      _tsAccountQueues.delete(key);
-    }
-    // Full session reset → idle
-    Object.assign(s, ts.makeSession());
-    tsLog('warn', 'تم إعادة التعيين القسري للجلسة — جاهز للبدء من جديد');
-    pushTsEvent('ts_progress');
-    ok(res, { snapshot: tsSnapshot() });
-  });
-
   app.post('/api/ts/start', async (req, res) => {
     const s = tsSession();
     if (s.state === 'running' || s.state === 'waiting') {
       return fail(res, new Error('A session is already running'));
-    }
-    // Clear any zombie queue entry from a previously-completed session.
-    // This prevents new sessions from silently queuing behind a ghost job
-    // when the account queue was not cleaned up properly (e.g. after a crash
-    // or when the server processed finalizeTs but the queue's finally block
-    // ran after the new start arrived).
-    const emailForQueue = String(req.body?.email || '').trim().toLowerCase();
-    if (emailForQueue && isTsAccountQueued(emailForQueue)) {
-      _tsAccountQueues.delete(accountQueueKey(emailForQueue));
     }
     const { email, rules, count, prefix, waitMinutes, proxyUrl, speed, selectedTeamId, brightData } = req.body || {};
     const acct = tsFindAccount(email);
@@ -2434,24 +2127,9 @@ const ts = require('./lib/trueStudio');
     const selTeamId = (typeof selectedTeamId === 'string' && selectedTeamId.trim()) ? selectedTeamId.trim() : null;
 
     // Validate Bright Data config if provided
-    const wantsBrightData = !!(brightData && brightData.enabled);
-    const bd = resolveBrightDataConfig(brightData, { useSavedPassword: true, useSavedFields: true });
-    if (wantsBrightData && !bd) {
-      return fail(res, new Error('Bright Data settings are incomplete — احفظ Customer ID/Username وZone وPassword أولاً'));
-    }
-    if (bd) {
-      const preflight = await runBrightDataPreflight(bd, { testCount: 3 });
-      if (!preflight.ok) {
-        const firstTarget = preflight.failedTargets?.[0];
-        const firstRotation = preflight.rotation?.checks?.find(c => !c.ok);
-        const reason = firstTarget
-          ? `${firstTarget.label}: ${firstTarget.error || 'failed'}`
-          : firstRotation
-            ? `rotation: ${firstRotation.error || 'failed'}`
-            : 'unknown preflight failure';
-        return fail(res, new Error('Bright Data preflight failed — ' + reason));
-      }
-    }
+    const bd = (brightData && brightData.enabled && brightData.customerId && brightData.zoneName && brightData.zonePassword)
+      ? { customerId: String(brightData.customerId).trim(), zoneName: String(brightData.zoneName).trim(), zonePassword: String(brightData.zonePassword), protocol: brightData.protocol === 'socks5h' ? 'socks5h' : 'http' }
+      : null;
 
     // Reset session
     Object.assign(s, ts.makeSession());
@@ -2472,27 +2150,23 @@ const ts = require('./lib/trueStudio');
     ok(res, { snapshot: tsSnapshot() });
 
     const batchSize = Math.max(1, Math.min(5, parseInt(req.body?.batchSize) || 1));
-    // Both the job AND the error handler are wrapped in withUser so tsSession()
-    // always resolves to the correct user's session — even in the catch path.
-    withUser(uid, () => {
-      enqueueTsAccount(creds.email, async () => {
+    withUser(uid, () => enqueueTsAccount(creds.email, async () => {
+      const ses = tsSession();
+      if (!ses.cancelRequested) {
+        ses.state = 'running';
+        if (ses.current === 'Queued for account') ses.current = '';
+        pushTsEvent('ts_progress');
+      }
+      const sessionBudget = Math.max(0, parseInt(req.body?.sessionBudget) || 0);
+      return runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyList, speedFactor, selectedTeamId: selTeamId, brightData: bd, batchSize, sessionBudget });
+    }, { label: 'Create bots session' })
+      .catch(e => {
         const ses = tsSession();
-        if (!ses.cancelRequested) {
-          ses.state = 'running';
-          if (ses.current === 'Queued for account') ses.current = '';
-          pushTsEvent('ts_progress');
-        }
-        const sessionBudget = Math.max(0, parseInt(req.body?.sessionBudget) || 0);
-        return runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyList, speedFactor, selectedTeamId: selTeamId, brightData: bd, batchSize, sessionBudget });
-      }, { label: 'Create bots session' })
-        .catch(e => withUser(uid, () => {
-          const ses = tsSession();
-          ses.state = 'error';
-          ses.lastError = e.message || String(e);
-          tsLog('error', 'فشل الجلسة: ' + ses.lastError);
-          pushTsEvent('ts_done');
-        }));
-    });
+        ses.state = 'error';
+        ses.lastError = e.message || String(e);
+        tsLog('error', 'فشل الجلسة: ' + ses.lastError);
+        pushTsEvent('ts_done');
+      }));
   });
 
   // ── Bright Data URL builder ──────────────────────────────────────────────
@@ -2506,7 +2180,6 @@ const ts = require('./lib/trueStudio');
   // single IP while the NEXT bot automatically gets a different one.
   // Without sessionId the proxy is "truly rotating" (new IP on every request).
   function buildBrightDataUrl(bd, sessionId) {
-    bd = resolveBrightDataConfig(bd, { useSavedPassword: false, useSavedFields: false }) || bd;
     const host  = 'brd.superproxy.io';
     const sid   = sessionId ? ('-session-' + String(sessionId).replace(/[^a-z0-9_-]/gi, '')) : '';
     const user  = encodeURIComponent(`brd-customer-${bd.customerId}-zone-${bd.zoneName}${sid}`);
@@ -2576,14 +2249,14 @@ const ts = require('./lib/trueStudio');
       else if (proxyList.length === 1) tsLog('info', 'Proxy ثابت: ' + proxyList[0].replace(/:[^:@]+@/, ':***@'));
 
       const LONG_CREATE_REFRESH_MS = 4 * 60 * 1000;
-      // Per-bot hard timeout — counts only "non-captcha / non-wait" time.
-      // Both manual captcha (s.pendingCaptcha) AND automatic captcha
-      // (s.autoCaptchaCount > 0) pause this counter, so solver latency never
-      // triggers a false timeout.
-      // Budget scales with batchSize: parallel bots share the same account
-      // context and can queue behind each other, so give each bot more headroom.
-      //   batchSize=1 → 3 min  |  2 → 5 min  |  3 → 7 min  |  4+ → 9+ min
-      const BOT_CREATION_TIMEOUT_MS = Math.max(180_000, requestedBatchSize * 150_000);
+      // Per-bot hard timeout — counts only "non-captcha" time.
+      // Captcha solving (manual or automated) is paused from this counter so
+      // a genuine captcha doesn't trigger a false timeout.
+      // Axios HTTP timeout = 32s, rate-limit back-off up to ~4×30s = 120s worst
+      // case, but _req retries have their own waits.  90s covers all normal
+      // operations (login, browse, createApplication, ensureBot, resetBotToken)
+      // without a captcha.
+      const BOT_CREATION_TIMEOUT_MS = 90_000;
 
       // ── Account-switching pool ───────────────────────────────────────────
       // Tracks the currently active TS account email (may change on rate limit).
@@ -2677,7 +2350,7 @@ const ts = require('./lib/trueStudio');
           const tick = () => {
             if (done) return;
             const now = Date.now();
-            const isCaptcha = !!s.pendingCaptcha || (s.autoCaptchaCount || 0) > 0;
+            const isCaptcha = !!s.pendingCaptcha;
             const isWaiting = s.state === 'waiting';
             const paused    = isCaptcha || isWaiting;
 
@@ -2685,7 +2358,7 @@ const ts = require('./lib/trueStudio');
               elapsedMs += now - lastTickAt;
             } else if (isCaptcha && !captchaPauseLogged) {
               captchaPauseLogged = true;
-              tsLog('info', `⏱ "${botName}": كابتشا جارٍ — العداد متوقف`);
+              tsLog('info', `⏱ "${botName}": كابتشا معلّق — العداد متوقف`);
             } else if (!isCaptcha && captchaPauseLogged) {
               captchaPauseLogged = false;
               tsLog('info', `⏱ "${botName}": الكابتشا اكتمل — استئناف العداد (${Math.round(elapsedMs / 1000)}s مستهلَكة)`);
@@ -2880,9 +2553,7 @@ const ts = require('./lib/trueStudio');
         //
         // Discord rate limit: 50 req/sec per token.
         // Worst case: 5 bots × 3 calls = 15 concurrent requests — well within limit.
-        // Single rotating proxy (e.g. Webshare) also counts as IP rotation —
-        // every request through the rotating proxy gets a fresh IP automatically.
-        const hasIpRotation = !!(bd || proxyList.length >= 1);
+        const hasIpRotation = !!(bd || proxyList.length > 1);
         const effectiveBatch = hasIpRotation ? Math.max(1, Math.min(5, requestedBatchSize)) : 1;
         const useParallelMode = effectiveBatch > 1;
 
@@ -2897,39 +2568,15 @@ const ts = require('./lib/trueStudio');
           const _botStartedAt = Date.now();
           let botClient = client;
           let botNetOpts = netOpts;
-          let egressIp = null;
-          let usedProxyUrl = null;
-
           if (bd) {
             const sessionId = 'bot' + num + '_' + Math.random().toString(36).slice(2, 8);
-            usedProxyUrl = buildBrightDataUrl(bd, sessionId);
-            botClient = ts.cloneClientWithProxy(client, usedProxyUrl);
+            const bdProxy = buildBrightDataUrl(bd, sessionId);
+            botClient = ts.cloneClientWithProxy(client, bdProxy);
             botNetOpts = { ...netOpts, client: botClient };
-          } else if (proxyList.length >= 1) {
-            // Each bot gets its own cloned client so concurrent bots have
-            // independent cookie jars/fingerprints. With a rotating proxy
-            // (even a single URL) each clone exits from a different IP.
-            usedProxyUrl = proxyList[botIndex % proxyList.length];
-            botClient = ts.cloneClientWithProxy(client, usedProxyUrl);
+          } else if (proxyList.length > 1) {
+            const botProxy = proxyList[botIndex % proxyList.length];
+            botClient = ts.cloneClientWithProxy(client, botProxy);
             botNetOpts = { ...netOpts, client: botClient };
-          }
-
-          // ── IP verification — confirm actual egress IP before hitting Discord ──
-          // Uses testProxy() through the bot's own proxyUrl so the IP check exits
-          // from the same egress as the Discord requests that follow.
-          // Short timeout (4 s) — if the proxy is healthy this resolves in < 1 s.
-          if (usedProxyUrl) {
-            const _ipStart = Date.now();
-            try {
-              const ipResult = await testProxy(usedProxyUrl, { timeoutMs: 4000 });
-              egressIp = ipResult?.ip || null;
-              const _ipMs = Date.now() - _ipStart;
-              if (egressIp) {
-                tsLog('info', `🌐 ${name} — IP: ${egressIp} ✓ (${_ipMs}ms) — Rate-limit مستقل عن بقية الدُّفعة`);
-              }
-            } catch (_e) {
-              tsLog('warn', `${name} — تعذر التحقق من IP (${_e.message || _e}) — الإنشاء يستمر`);
-            }
           }
 
           // In parallel mode every bot exits from a different IP — no need to
@@ -2961,41 +2608,11 @@ const ts = require('./lib/trueStudio');
 
           const savedPfp = tsPfpSettings();
           if (savedPfp.avatar || savedPfp.banner) {
-            let pfpApplied = false;
             try {
-              await ts.updateBotProfileViaOwner({
-                token,
-                appId: appPayload.id,
-                avatar: savedPfp.avatar || undefined,
-                banner: savedPfp.banner || undefined,
-                netOpts: botNetOpts,
-              });
-              pfpApplied = true;
+              await ts.updateBotProfile({ botToken, avatar: savedPfp.avatar || undefined, banner: savedPfp.banner || undefined, netOpts: botNetOpts });
+              tsLog('success', 'تم تطبيق Pfp المحفوظ على ' + name);
             } catch (e) {
-              tsLog('warn', 'تعذر تطبيق Pfp من حساب المالك على ' + name + ': ' + (e.message || e));
-            }
-            try {
-              await ts.updateAppVisuals({
-                token,
-                appId: appPayload.id,
-                icon: savedPfp.avatar || undefined,
-                coverImage: savedPfp.banner || undefined,
-                netOpts: botNetOpts,
-              });
-              pfpApplied = true;
-            } catch (e) {
-              tsLog('warn', 'تعذر تطبيق صورة التطبيق/البنر على ' + name + ': ' + (e.message || e));
-            }
-            if (!pfpApplied && savedPfp.avatar) {
-              try {
-                await ts.updateBotProfile({ botToken, avatar: savedPfp.avatar || undefined, netOpts: botNetOpts });
-                pfpApplied = true;
-              } catch (e) {
-                tsLog('warn', 'تعذر تطبيق Avatar عبر توكن البوت على ' + name + ': ' + (e.message || e));
-              }
-            }
-            if (pfpApplied) {
-              tsLog('success', 'تم تطبيق Pfp/Visuals المحفوظة على ' + name);
+              tsLog('warn', 'تعذر تطبيق Pfp على ' + name + ': ' + (e.message || e));
             }
           }
 
@@ -3017,7 +2634,7 @@ const ts = require('./lib/trueStudio');
           }
 
           const durationMs = Date.now() - _botStartedAt;
-          return { appPayload, botToken, durationMs, egressIp };
+          return { appPayload, botToken, durationMs };
         };
 
         // ── Main batch loop ──────────────────────────────────────────────────
@@ -3109,14 +2726,13 @@ const ts = require('./lib/trueStudio');
             const slot   = batchSlots[k];
 
             if (result.status === 'fulfilled') {
-              const { appPayload, botToken, durationMs, egressIp } = result.value;
+              const { appPayload, botToken, durationMs } = result.value;
               s.bots.push({ name: slot.name, appId: appPayload.id, botUserId: appPayload.bot?.id || null, token: botToken });
               s.done += 1; botsThisAccount += 1;
               if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
               const durSec = durationMs ? (durationMs / 1000).toFixed(1) : null;
               const durLabel = durSec ? ` ⚡ ${durSec}s` : '';
-              const ipLabel = egressIp ? ` · 🌐 ${egressIp}` : '';
-              tsLog('success', '✅ تم: ' + slot.name + ipLabel + ' · token=' + botToken.slice(0, 12) + '…' + durLabel, { durationMs, appId: appPayload.id, botName: slot.name, egressIp: egressIp || null });
+              tsLog('success', 'تم: ' + slot.name + ' · token=' + botToken.slice(0, 12) + '…' + durLabel, { durationMs, appId: appPayload.id, botName: slot.name });
               try {
                 const tkList = await botTokensStore.get() || [];
                 const tkFiltered = tkList.filter(t => t.appId !== appPayload.id);
@@ -3194,9 +2810,8 @@ const ts = require('./lib/trueStudio');
                 // ── Retry (step 3) ─────────────────────────────────────────────
                 try {
                   const _rs = Date.now();
-                  const { appPayload: rApp, botToken: rTok } = await _withBotTimeout(
-                    createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot),
-                    slot.name
+                  const { appPayload: rApp, botToken: rTok } = await createOneBotAsync(
+                    slot.botIndex, slot.num, slot.name, teamIdSnapshot
                   );
                   const rDurMs = Date.now() - _rs;
                   s.bots.push({ name: slot.name, appId: rApp.id, botUserId: rApp.bot?.id || null, token: rTok });
@@ -3235,9 +2850,8 @@ const ts = require('./lib/trueStudio');
                   rateLimiter = _freshCtx.rateLimiter;
                   tsLog('success', `✓ الجلسة أُعيدت — إعادة إنشاء ${slot.name}…`);
                   const _tStart = Date.now();
-                  const { appPayload: tApp, botToken: tTok } = await _withBotTimeout(
-                    createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot),
-                    slot.name
+                  const { appPayload: tApp, botToken: tTok } = await createOneBotAsync(
+                    slot.botIndex, slot.num, slot.name, teamIdSnapshot
                   );
                   const tDurMs = Date.now() - _tStart;
                   s.bots.push({ name: slot.name, appId: tApp.id, botUserId: tApp.bot?.id || null, token: tTok });
@@ -3326,10 +2940,7 @@ const ts = require('./lib/trueStudio');
                   }
                   try {
                     const _retryStart = Date.now();
-                    const { appPayload: rApp, botToken: rTok } = await _withBotTimeout(
-                      createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot),
-                      slot.name
-                    );
+                    const { appPayload: rApp, botToken: rTok } = await createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot);
                     const rDurMs = Date.now() - _retryStart;
                     s.bots.push({ name: slot.name, appId: rApp.id, botUserId: rApp.bot?.id || null, token: rTok });
                     s.done += 1; s.failed -= 1; botsThisAccount += 1;
@@ -3407,7 +3018,6 @@ const ts = require('./lib/trueStudio');
 
   function finalizeTs(errored = false) {
     const s = tsSession();
-    clearPendingTsCaptcha(errored ? 'Session ended after error' : 'Session finished');
     s.finishedAt = Date.now();
     s.current = '';
     s.waitUntilTs = 0;
@@ -3462,373 +3072,6 @@ app.get('/api/features/stream', (req, res) => {
   res.on('error', cleanup);
 });
 
-
-// ═══════════════════════════════════════════════
-//  ACCOUNT CREATOR — Discord account registration engine
-// ═══════════════════════════════════════════════
-{
-  const ac = require('./lib/accountCreator');
-  const { encrypt, tryDecrypt } = require('./lib/crypto');
-
-  // Per-user account-creator sessions
-  const _acSessions = new Map();
-  function acSession() {
-    const uid = currentUserId();
-    if (!_acSessions.has(uid)) _acSessions.set(uid, ac.makeSession());
-    return _acSessions.get(uid);
-  }
-
-  const AC_LOG_MAX = 300;
-  function acLog(level, msg) {
-    const s = acSession();
-    const entry = { ts: Date.now(), level, msg: String(msg).slice(0, 500) };
-    s.log.push(entry);
-    if (s.log.length > AC_LOG_MAX) s.log.splice(0, s.log.length - AC_LOG_MAX);
-    acBroadcast('ac_log', { entry });
-  }
-
-  function acSnapshot() {
-    const s = acSession();
-    return {
-      state: s.state, total: s.total, done: s.done, failed: s.failed,
-      current: s.current, lastError: s.lastError,
-      startedAt: s.startedAt, finishedAt: s.finishedAt,
-      accountsCount: (s.accounts || []).length,
-    };
-  }
-
-  const acSSEClients = new Set();
-  function acBroadcast(type, payload = {}) {
-    const uid = currentUserId();
-    const data = JSON.stringify({ type, ...payload, snapshot: acSnapshot(), _uid: uid });
-    for (const sc of acSSEClients) {
-      try { sc.res.write(`data: ${data}\n\n`); } catch (_) {}
-    }
-  }
-
-  // ── Persistent settings storage ──────────────────────────────────────────
-  function acEnsureSettings() {
-    const d = ensureData();
-    if (!d.acSettings || typeof d.acSettings !== 'object') {
-      d.acSettings = {};
-      dataStore.touch();
-    }
-    return d.acSettings;
-  }
-
-  function acSettingsPublic() {
-    const s = acEnsureSettings();
-    return {
-      smsProvider: s.smsProvider || 'smspva',
-      hasSmsApiKey: !!(s.smsApiKey),
-      emailProvider: s.emailProvider || 'mailtm',
-      customEmail: s.customEmail || '',
-      smsCountry: s.smsCountry || 'US',
-      proxyUrl: s.proxyUrl || '',
-    };
-  }
-
-  // ── GET settings ─────────────────────────────────────────────────────────
-  app.get('/api/ac/settings', (req, res) => ok(res, { settings: acSettingsPublic() }));
-
-  // ── POST save settings ────────────────────────────────────────────────────
-  app.post('/api/ac/settings', (req, res) => {
-    const body = req.body || {};
-    const s = acEnsureSettings();
-    if (body.smsProvider !== undefined) s.smsProvider = String(body.smsProvider || 'smspva').trim();
-    if (body.smsApiKey   !== undefined && body.smsApiKey.trim()) s.smsApiKey = encrypt(body.smsApiKey.trim());
-    if (body.emailProvider !== undefined) s.emailProvider = String(body.emailProvider || 'mailtm').trim();
-    if (body.customEmail !== undefined) s.customEmail = String(body.customEmail || '').trim();
-    if (body.smsCountry  !== undefined) s.smsCountry = String(body.smsCountry || 'US').trim().toUpperCase();
-    if (body.proxyUrl    !== undefined) s.proxyUrl = String(body.proxyUrl || '').trim();
-    dataStore.touch();
-    ok(res, { settings: acSettingsPublic() });
-  });
-
-  // ── GET state ─────────────────────────────────────────────────────────────
-  app.get('/api/ac/state', (req, res) => ok(res, { snapshot: acSnapshot() }));
-
-  // ── GET created accounts export ───────────────────────────────────────────
-  app.get('/api/ac/accounts', (req, res) => {
-    const s = acSession();
-    ok(res, { accounts: s.accounts || [] });
-  });
-
-  // ── POST clear log ────────────────────────────────────────────────────────
-  app.post('/api/ac/clear-log', (req, res) => {
-    acSession().log = [];
-    ok(res, {});
-  });
-
-  // ── POST stop ─────────────────────────────────────────────────────────────
-  app.post('/api/ac/stop', (req, res) => {
-    const s = acSession();
-    s.cancelRequested = true;
-    if (s.cancelRef) s.cancelRef.cancelled = true;
-    acLog('warn', 'إيقاف طُلب — سيتوقف بعد الحساب الحالي...');
-    ok(res, { snapshot: acSnapshot() });
-  });
-
-  // ── POST force-reset ──────────────────────────────────────────────────────
-  app.post('/api/ac/force-reset', (req, res) => {
-    const uid = currentUserId();
-    const s = acSession();
-    if (s.cancelRef) s.cancelRef.cancelled = true;
-    _acSessions.set(uid, ac.makeSession());
-    acLog('warn', 'تم إعادة التعيين القسري — جاهز للبدء');
-    acBroadcast('ac_progress');
-    ok(res, { snapshot: acSnapshot() });
-  });
-
-  // ── Persistent accounts library (survives server restarts) ──────────────
-  function acLibrary() {
-    const d = ensureData();
-    if (!Array.isArray(d.acLibrary)) { d.acLibrary = []; dataStore.touch(); }
-    return d.acLibrary;
-  }
-
-  function acLibrarySave(account) {
-    const lib = acLibrary();
-    // Assign a unique id for deletion
-    const entry = Object.assign({ _id: Date.now() + '_' + Math.random().toString(36).slice(2) }, account);
-    lib.push(entry);
-    if (lib.length > 5000) lib.splice(0, lib.length - 5000);
-    dataStore.touch();
-    return entry;
-  }
-
-  // ── GET library (all saved accounts) ─────────────────────────────────────
-  app.get('/api/ac/library', (req, res) => {
-    ok(res, { accounts: acLibrary() });
-  });
-
-  // ── DELETE one account from library ──────────────────────────────────────
-  app.delete('/api/ac/library/:id', (req, res) => {
-    const lib = acLibrary();
-    const idx = lib.findIndex(a => a._id === req.params.id);
-    if (idx === -1) return fail(res, new Error('not found'));
-    lib.splice(idx, 1);
-    dataStore.touch();
-    ok(res, { deleted: true });
-  });
-
-  // ── DELETE all accounts from library ─────────────────────────────────────
-  app.delete('/api/ac/library', (req, res) => {
-    const d = ensureData();
-    d.acLibrary = [];
-    dataStore.touch();
-    ok(res, { deleted: true });
-  });
-
-  // ── POST join-guild ───────────────────────────────────────────────────────
-  // Joins a Discord server using the stored token of each account.
-  // Body: { inviteCode: string, accountIds: string[] | 'all' }
-  app.post('/api/ac/join-guild', async (req, res) => {
-    const { inviteCode: rawCode, accountIds } = req.body || {};
-    if (!rawCode) return fail(res, new Error('رمز الدعوة مطلوب'));
-
-    // Parse invite code from full URL or raw code
-    const code = String(rawCode).trim()
-      .replace(/^https?:\/\/(www\.)?(discord\.gg|discord\.com\/invite)\//i, '')
-      .replace(/[?&#].*/g, '')
-      .trim();
-    if (!code || code.length < 2) return fail(res, new Error('رمز الدعوة غير صحيح'));
-
-    const library = acLibrary();
-    const targets = (!accountIds || accountIds === 'all')
-      ? library
-      : library.filter(a => (accountIds || []).includes(a._id));
-
-    if (!targets.length) return fail(res, new Error('لا توجد حسابات'));
-
-    const proxyUrl = (() => { try { return acEnsureSettings().proxyUrl || ''; } catch (_) { return ''; } })();
-
-    const results = [];
-    for (let i = 0; i < targets.length; i++) {
-      const acc = targets[i];
-      const r = await _acJoinGuild({ token: acc.token, code, proxyUrl });
-      results.push({ id: acc._id, username: acc.username, email: acc.email, ...r });
-      if (i < targets.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1200 + Math.random() * 1400));
-      }
-    }
-    ok(res, { code, results });
-  });
-
-  // Helper: join one Discord server with one user token
-  async function _acJoinGuild({ token, code, proxyUrl }) {
-    if (!token) return { status: 'no_token' };
-    try {
-      const client = ts.createClient(proxyUrl || '');
-      const r = await client.http.post(
-        `https://discord.com/api/v9/invites/${code}`,
-        {},
-        {
-          headers: {
-            'Authorization':      token,
-            'Content-Type':       'application/json',
-            'X-Super-Properties': client.superPropsB64,
-            'Origin':             'https://discord.com',
-            'Referer':            `https://discord.com/invite/${code}`,
-          },
-        }
-      );
-
-      if (r.status === 200) {
-        return { status: 'joined', guild: r.data?.guild?.name || '' };
-      }
-      if (r.status === 401) return { status: 'invalid_token' };
-      if (r.status === 403) return { status: 'banned' };
-      if (r.status === 429) return { status: 'rate_limited' };
-
-      const errCode = r.data?.code;
-      if (errCode === 40007) return { status: 'banned' };
-      if (errCode === 10006) return { status: 'invalid_invite' };
-      if (errCode === 30001) return { status: 'max_guilds' };
-      if (errCode === 40002) return { status: 'phone_required' };
-      if (r.data?.message?.toLowerCase().includes('already')) {
-        return { status: 'already_member', guild: r.data?.guild?.name || '' };
-      }
-      return { status: 'error', detail: (r.data?.message || `HTTP ${r.status}`).slice(0, 60) };
-    } catch (e) {
-      return { status: 'error', detail: (e.message || 'network error').slice(0, 60) };
-    }
-  }
-
-  // ── POST start ────────────────────────────────────────────────────────────
-  app.post('/api/ac/start', async (req, res) => {
-    const s = acSession();
-    if (s.state === 'running') return fail(res, new Error('جلسة تعمل بالفعل'));
-
-    const body = req.body || {};
-    const cfg = acEnsureSettings();
-
-    // SMS is optional — if no key configured, phone verification is skipped
-    const rawSmsKey = cfg.smsApiKey ? tryDecrypt(cfg.smsApiKey) : '';
-    const smsSettings = rawSmsKey
-      ? { provider: cfg.smsProvider || 'smspva', apiKey: rawSmsKey }
-      : null; // null = no phone step
-
-    const count = Math.max(1, Math.min(50, parseInt(body.count) || 1));
-    const usernamePrefix = String(body.usernamePrefix || '').trim();
-
-    // Reuse TrueStudio captcha settings (2Captcha / CapSolver / CapMonster)
-    const captchaSettings = (() => { const d = ensureData(); return d.tsCaptcha || {}; })();
-    const captchaKey = captchaSettings.apiKey ? tryDecrypt(captchaSettings.apiKey) : '';
-    if (!captchaKey) {
-      return fail(res, new Error('مفتاح Captcha مطلوب — احفظه أولاً في إعدادات البوتات (2Captcha / CapSolver)'));
-    }
-
-    // Reuse speed factor from TrueStudio settings
-    const tsSettings = (() => { const d = ensureData(); return d.tsSettings || {}; })();
-    const speedFactor = parseFloat(tsSettings.speedFactor) || 1;
-
-    // Initialize session
-    Object.assign(s, ac.makeSession());
-    s.state = 'running';
-    s.total = count;
-    s.startedAt = Date.now();
-    s.cancelRef = { cancelled: false };
-    s.cancelRequested = false;
-
-    const uid = currentUserId();
-    ok(res, { snapshot: acSnapshot() });
-
-    // Build captcha resolver — uses the same battle-tested solvers used elsewhere.
-    // Critical for Discord: enterprise=1 + invisible=1 + userAgent are REQUIRED.
-    // The old inline 2Captcha code lacked these → Discord kept rejecting tokens.
-    const captchaResolver = async ({ sitekey, rqdata, url }) => {
-      const provider = (captchaSettings.provider || '2captcha').toLowerCase();
-      if (provider === 'capsolver') {
-        return await solveWithCapSolver({ apiKey: captchaKey, sitekey, pageUrl: url, rqdata });
-      }
-      if (provider === 'capmonster') {
-        return await solveWithCapMonster({ apiKey: captchaKey, sitekey, pageUrl: url, rqdata });
-      }
-      // 2Captcha — full implementation: enterprise=1, invisible=1, userAgent all included
-      return await solveWith2Captcha({ apiKey: captchaKey, sitekey, pageUrl: url, rqdata });
-    };
-
-    if (!smsSettings) acLog('info', '📵 SMS غير مُفعَّل — الإنشاء بدون رقم هاتف');
-    acLog('info', `⚡ speedFactor: ${speedFactor} — captcha: ${captchaSettings.provider || '2captcha'}`);
-
-    // Run in background
-    withUser(uid, () => {
-      ac.runAccountSession({
-        count,
-        usernamePrefix,
-        smsSettings,
-        emailSettings: { provider: cfg.emailProvider || 'mailtm' },
-        customEmail: cfg.customEmail || '',
-        proxyUrl: cfg.proxyUrl || '',
-        smsCountry: cfg.smsCountry || 'US',
-        speedFactor,
-        cancelRef: s.cancelRef,
-        onLog: (level, msg) => withUser(uid, () => acLog(level, msg)),
-        onProgress: (done) => withUser(uid, () => {
-          acSession().done = done;
-          acBroadcast('ac_progress');
-        }),
-        onCaptcha: captchaResolver,
-        onAccountCreated: (account) => withUser(uid, () => {
-          // Persist immediately so no account is lost on crash/restart
-          const saved = acLibrarySave(account);
-          acSession().accounts = (acSession().accounts || []).concat([saved]);
-          acBroadcast('ac_account', { account: saved });
-        }),
-      })
-      .then(results => withUser(uid, () => {
-        const ses = acSession();
-        ses.state = 'done';
-        ses.done  = results.success.length;
-        ses.failed = results.failed.length;
-        ses.finishedAt = Date.now();
-        acLog('success', `🎉 اكتمل — ${results.success.length} حساب ناجح، ${results.failed.length} فشل`);
-        acBroadcast('ac_done');
-      }))
-      .catch(e => withUser(uid, () => {
-        const ses = acSession();
-        ses.state = 'error';
-        ses.lastError = e.message || String(e);
-        ses.finishedAt = Date.now();
-        acLog('error', 'فشلت الجلسة: ' + ses.lastError);
-        acBroadcast('ac_done');
-      }));
-    });
-  });
-
-  // ── SSE stream ────────────────────────────────────────────────────────────
-  app.get('/api/ac/stream', (req, res) => {
-    res.setHeader('Content-Type',  'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection',    'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
-
-    const sc = { res };
-    acSSEClients.add(sc);
-
-    // Send initial state
-    const uid = currentUserId();
-    withUser(uid, () => {
-      const data = JSON.stringify({ type: 'ac_init', snapshot: acSnapshot(), log: acSession().log, _uid: uid });
-      try { res.write(`data: ${data}\n\n`); } catch (_) {}
-    });
-
-    const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch (_) {} }, 25000);
-    let cleaned = false;
-    const cleanup = () => {
-      if (cleaned) return;
-      cleaned = true;
-      clearInterval(ping);
-      acSSEClients.delete(sc);
-    };
-    req.on('close', cleanup);
-    req.on('error', cleanup);
-    res.on('close', cleanup);
-    res.on('error', cleanup);
-  });
-}
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Bot-Studio running on http://localhost:${PORT}`);

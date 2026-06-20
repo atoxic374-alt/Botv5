@@ -74,7 +74,6 @@ export class TrueStudioManager {
     if (!this._inited) {
       await this.refresh();
       await this._loadCaptchaSettings();
-      await this._loadBrightDataSettings();
       await this._loadBotTokens();
       await this._loadPfp();
       await this._loadAutoIntents();
@@ -89,24 +88,6 @@ export class TrueStudioManager {
     this.render();
     // If a captcha is already pending when this view opens, surface the modal.
     this._maybeOpenCaptchaModal();
-  }
-
-  async _loadBrightDataSettings() {
-    try {
-      const r = await window.electronAPI.tsBrightDataSettings();
-      if (r && r.settings) {
-        const s = r.settings;
-        if (!this.form.brightData) this.form.brightData = { enabled: false, customerId: '', zoneName: '', zonePassword: '', protocol: 'http' };
-        this.form.brightData.enabled    = s.enabled === true;
-        this.form.brightData.customerId = s.customerId || '';
-        this.form.brightData.zoneName   = s.zoneName  || '';
-        this.form.brightData.protocol   = s.protocol  || 'http';
-        // Password is not sent to the client — mark if one is saved
-        this.form.brightData._hasSavedPassword = s.hasPassword === true;
-        if (s.batchSize) this.form.batchSize = s.batchSize;
-        if (s.speed)     this.form.speed     = s.speed;
-      }
-    } catch (e) { /* non-fatal */ }
   }
 
   async _loadCaptchaSettings() {
@@ -529,10 +510,6 @@ export class TrueStudioManager {
           <button class="ts-btn danger big" id="ts-stop">${t('ts.stop')}</button>
           <button class="ts-btn mint big" id="ts-start">${t('ts.start_session')}</button>
         </div>
-        ${['done','error','cancelled'].includes(s.state) ? `
-        <div class="ts-force-reset-row">
-          <button class="ts-btn warn" id="ts-force-reset" title="امسح أي حالة عالقة وأعد الجلسة إلى الوضع الخامل — استخدم عند توقف الجلسة بعد rate-limit">⚡ إعادة تعيين قسري</button>
-        </div>` : ''}
 
         <!-- Live log -->
         <div class="ts-log-wrap">
@@ -1051,7 +1028,7 @@ export class TrueStudioManager {
 
     const proxyStatus = pr
       ? (pr.ok
-          ? `<span style="color:#3ba55d;font-size:11px;">✓ يعمل — ${escapeHtml(pr.summary || ('IP: ' + (pr.ip || '?')))}</span>`
+          ? `<span style="color:#3ba55d;font-size:11px;">✓ يعمل — IP: ${escapeHtml(pr.ip || '?')}</span>`
           : `<span style="color:#ed4245;font-size:11px;">✕ ${escapeHtml(pr.error || 'فشل الاتصال')}</span>`)
       : '';
 
@@ -1107,15 +1084,12 @@ export class TrueStudioManager {
       : 'Zone Name  (مثلاً: residential_rotating1)';
 
     // ── Bright Data credential form (shown when toggle is ON) ───────────────
-    const bdPassPlaceholder = bd._hasSavedPassword && !bd.zonePassword
-      ? '••••••••  (محفوظة — اتركها فارغة للإبقاء عليها)'
-      : 'Zone Password';
     const bdForm = bd.enabled ? `
       <div style="margin-top:8px;display:grid;gap:6px;">
         ${presetStrip}
         ${quickSetupPanel}
         <input type="text" id="ts-bd-customer" class="ts-input ltr"
-          placeholder="Customer ID أو الصق username كامل من Bright Data"
+          placeholder="Account ID  (لوحة Bright Data → Settings → Account)"
           value="${escapeAttr(bd.customerId || '')}" autocomplete="off" />
         <div class="ts-account-row">
           <input type="text" id="ts-bd-zone" class="ts-input ltr"
@@ -1128,24 +1102,14 @@ export class TrueStudioManager {
         </div>
         <div class="ts-account-row">
           <input type="password" id="ts-bd-pass" class="ts-input ltr"
-            placeholder="${escapeAttr(bdPassPlaceholder)}"
+            placeholder="Zone Password"
             value="${escapeAttr(bd.zonePassword || '')}" style="flex:1;" autocomplete="new-password" />
           <button class="ts-btn" id="ts-proxy-test" style="white-space:nowrap;">اختبار</button>
         </div>
         ${proxyStatus ? `<div>${proxyStatus}</div>` : ''}
-        <div class="ts-account-row" style="margin-top:2px;">
-          <button class="ts-btn ts-btn-primary" id="ts-bd-save" style="flex:1;font-weight:700;">
-            💾 حفظ إعدادات BrightData
-          </button>
-          ${bd._hasSavedPassword ? `
-            <button class="ts-btn" id="ts-bd-clear-pass" style="font-size:11px;color:#ed4245;border-color:#ed424540;">
-              مسح الكلمة السرية
-            </button>
-          ` : ''}
-        </div>
         <div class="ts-field-hint" style="line-height:1.6;">
-          انسخ من Bright Data: <b>Username</b> مثل brd-customer-...-zone-...، و<b>Password</b>، ثم اختر HTTP 33335 أو SOCKS5h 22228.<br>
-          زر الاختبار يجرب 3 جلسات مختلفة ثم يفحص Discord/CDN/BRD test targets. إذا ظهر <b>Rotation OK · Targets 9/9</b> فالإعداد جاهز قبل التشغيل.
+          كل بوت يحصل على <b>session ID عشوائي</b> → IP مختلف من نفس الاشتراك ✓<br>
+          يدعم: Residential · Datacenter · ISP · Mobile
         </div>
       </div>
     ` : `
@@ -1209,7 +1173,7 @@ export class TrueStudioManager {
         ${bdForm}
       </div>
 
-      ${(bd.enabled || (this.form.proxyUrl || '').split(/\n/).filter(l => l.trim()).length >= 1) ? `
+      ${(bd.enabled || (this.form.proxyUrl || '').split(/\n/).filter(l => l.trim()).length > 1) ? `
       <div class="ts-field" style="margin-top:8px;">
         <div class="ts-field-label" style="display:flex;align-items:center;gap:6px;">
           <span>حجم الدُّفعة المتوازية</span>
@@ -1223,10 +1187,8 @@ export class TrueStudioManager {
           <option value="5" ${(this.form.batchSize||1)===5?'selected':''}>5 بوت في نفس الوقت — أقصى سرعة</option>
         </select>
         <div class="ts-field-hint">
-          ${bd.enabled
-            ? 'Bright Data: كل بوت يحصل على session ID فريد → IP مختلف تماماً.'
-            : 'بروكسي Rotating: كل بوت يحصل على client مستقل → IP مختلف تلقائياً من مزود البروكسي.'}
-          اللوق سيعرض: "وضع الدُّفعات المتوازية: N بوت في نفس الوقت" عند التشغيل.
+          في وضع الدُّفعات: تأخيرات البشر تُحذف تلقائياً (كل بوت من IP مختلف) ·
+          الكولداون بين الدُّفعات: 1s فقط · السرعة تتضاعف بعدد الدُّفعة
         </div>
       </div>
       ` : ''}
@@ -3702,21 +3664,6 @@ export class TrueStudioManager {
       this.form.brightData.protocol = e.target.value || 'http';
     });
 
-    // ── BrightData save / clear-password buttons ─────────────────────────
-    $('#ts-bd-save')?.addEventListener('click', () => this.saveBrightDataSettings());
-    $('#ts-bd-clear-pass')?.addEventListener('click', async () => {
-      const ok = await showConfirm('حذف الكلمة السرية المحفوظة لـ Bright Data؟', { confirmText: 'حذف' });
-      if (!ok) return;
-      try {
-        const r = await window.electronAPI.tsSaveBrightDataSettings({ clearPassword: true });
-        if (r?.settings) {
-          if (this.form.brightData) this.form.brightData._hasSavedPassword = r.settings.hasPassword;
-        }
-        showNotification('تم حذف الكلمة السرية ✓', 'success');
-        this.render();
-      } catch (e) { showNotification(e.message || 'فشل الحذف', 'error'); }
-    });
-
     // Batch size selector (shown when IP rotation is active)
     $('#ts-batch-size')?.addEventListener('change', (e) => {
       this.form.batchSize = Math.max(1, Math.min(5, parseInt(e.target.value) || 1));
@@ -3748,57 +3695,28 @@ export class TrueStudioManager {
 
     // Proxy test button — handles both manual proxy list and Bright Data mode
     $('#ts-proxy-test')?.addEventListener('click', async () => {
-      const bd = this._brightDataPayload();
-      let payload = null;
+      const bd = this.form.brightData;
+      let url = '';
       if (bd?.enabled) {
-        if (!bd.customerId || !bd.zoneName || (!bd.zonePassword && !bd._hasSavedPassword)) {
-          showNotification('أدخل Customer ID/Username وZone Name وPassword أولاً', 'error'); return;
+        // Build a test URL from Bright Data credentials (using a fixed test session)
+        if (!bd.customerId || !bd.zoneName || !bd.zonePassword) {
+          showNotification('أدخل Customer ID وZone Name وPassword أولاً', 'error'); return;
         }
-        payload = { brightData: bd, testCount: 3 };
+        const host = 'brd.superproxy.io';
+        const user = encodeURIComponent(`brd-customer-${bd.customerId}-zone-${bd.zoneName}-session-test`);
+        const pass = encodeURIComponent(bd.zonePassword);
+        url = bd.protocol === 'socks5h'
+          ? `socks5h://${user}:${pass}@${host}:22228`
+          : `http://${user}:${pass}@${host}:33335`;
       } else {
-        const url = (this.form.proxyUrl || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)[0] || '';
+        url = (this.form.proxyUrl || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)[0] || '';
         if (!url) { showNotification('أدخل رابط Proxy أولاً', 'error'); return; }
-        payload = url;
       }
       const btn = $('#ts-proxy-test');
       if (btn) { btn.disabled = true; btn.textContent = '…'; }
       try {
-        const r = bd?.enabled
-          ? await window.electronAPI.tsProxyPreflight(payload)
-          : await window.electronAPI.tsVerifyProxy(payload);
-        if (r?.ok && bd?.enabled) {
-          const rotation = r.rotation || {};
-          const rotGood = Array.isArray(rotation.checks) ? rotation.checks.filter(x => x.ok) : [];
-          const preview = rotGood.slice(0, 3).map(x => [x.ip, x.country].filter(Boolean).join('/')).filter(Boolean).join(' · ');
-          const targetOk = Array.isArray(r.targets) ? r.targets.filter(x => x.ok).length : 0;
-          const targetTotal = Array.isArray(r.targets) ? r.targets.length : 0;
-          this._proxyTestResult = {
-            ok: true,
-            summary: `${rotGood.length}/${rotation.testedSessions || 3} جلسات · ${rotation.rotationLikely ? 'Rotation OK' : 'Rotation غير مؤكد'}${preview ? ' · ' + preview : ''} · Targets ${targetOk}/${targetTotal}`,
-          };
-        } else if (r?.ok) {
-          const good = Array.isArray(r.ips) ? r.ips.filter(x => x.ok && x.ip) : [];
-          const goodAny = Array.isArray(r.ips) ? r.ips.filter(x => x.ok) : [];
-          const unique = r.uniqueIpCount || new Set(good.map(x => x.ip)).size;
-          const uniqueLoc = r.uniqueLocationCount || new Set(goodAny.map(x => x.ip || x.country).filter(Boolean)).size;
-          const preview = goodAny.slice(0, 3).map(x => [x.ip, x.country].filter(Boolean).join('/')).filter(Boolean).join(' · ');
-          this._proxyTestResult = {
-            ok: true,
-            ip: r.ip,
-            summary: r.ips
-              ? `${goodAny.length}/${r.testedSessions || r.ips.length} جلسات · ${unique ? `IPs مختلفة: ${unique}` : `مواقع مختلفة: ${uniqueLoc}`}${preview ? ' · ' + preview : ''}`
-              : `IP: ${[r.ip, r.country].filter(Boolean).join(' · ') || '?'}`,
-          };
-        } else {
-          const failedTarget = Array.isArray(r?.failedTargets) && r.failedTargets[0];
-          const failedRotation = r?.rotation?.checks?.find?.(x => !x.ok);
-          const err = failedTarget
-            ? `${failedTarget.label}: ${failedTarget.error || 'failed'}`
-            : failedRotation
-              ? `Rotation: ${failedRotation.error || 'failed'}`
-              : (r?.error || 'فشل');
-          this._proxyTestResult = { ok: false, error: err };
-        }
+        const r = await window.electronAPI.tsVerifyProxy(url);
+        this._proxyTestResult = r?.ok ? { ok: true, ip: r.ip } : { ok: false, error: r?.error || 'فشل' };
       } catch (e) {
         this._proxyTestResult = { ok: false, error: e.message || 'فشل الاتصال' };
       } finally {
@@ -3817,7 +3735,6 @@ export class TrueStudioManager {
 
     $('#ts-start')?.addEventListener('click', () => this.startSession());
     $('#ts-stop')?.addEventListener('click', () => this.stopSession());
-    $('#ts-force-reset')?.addEventListener('click', () => this.forceReset());
     $('#ts-pfp-save')?.addEventListener('click', () => this._savePfpFromInputs(false));
     $('#ts-pfp-clear')?.addEventListener('click', () => this._savePfpFromInputs(true));
     $('#ts-pfp-preview-btn')?.addEventListener('click', () => this.togglePfpPreview());
@@ -4018,7 +3935,7 @@ export class TrueStudioManager {
         proxyUrl: this.form.proxyUrl || '',
         speed: this.form.speed || 'medium',
         selectedTeamId: this.form.selectedTeamId || '',
-        brightData: this._brightDataPayload(),
+        brightData: this.form.brightData || null,
         batchSize: this.form.batchSize || 1,
         sessionBudget: this.form.sessionBudget || 0,
       });
@@ -4039,85 +3956,6 @@ export class TrueStudioManager {
       this._renderLive();
     } catch (e) {
       showNotification(e.message || 'Stop failed', 'error');
-    }
-  }
-
-  async forceReset() {
-    try {
-      const email = this.selectedEmail || '';
-      const r = await window.electronAPI.tsForceReset(email);
-      if (r?.success === false) throw new Error(r.error || 'Force reset failed');
-      showNotification('✅ تمت إعادة التعيين — يمكنك الآن بدء جلسة جديدة', 'success');
-      await this.refresh();
-      this.render();
-      this._bind();
-    } catch (e) {
-      showNotification('❌ ' + (e.message || 'Force reset failed'), 'error');
-    }
-  }
-
-  // ── Bright Data settings actions ──────────────────────────
-  _parseBrightDataUsername(value) {
-    const raw = String(value || '').trim();
-    if (!raw) return null;
-    let user = raw;
-    try {
-      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) user = decodeURIComponent(new URL(raw).username || '');
-      else user = decodeURIComponent(raw.split(':')[0] || raw);
-    } catch (_) {}
-    const m = user.match(/^brd-customer-(.+?)-zone-(.+)$/i);
-    if (!m) return null;
-    const zone = (m[2] || '').replace(/-(?:session|country|ip|asn|gip|route_err|direct)\b.*$/i, '');
-    return { customerId: m[1] || '', zoneName: zone || '' };
-  }
-
-  _brightDataPayload() {
-    const bd = this.form.brightData || {};
-    const fromCustomer = this._parseBrightDataUsername(bd.customerId);
-    const fromZone = this._parseBrightDataUsername(bd.zoneName);
-    const customerId = (fromZone?.customerId || fromCustomer?.customerId || bd.customerId || '')
-      .replace(/^brd-customer-/i, '')
-      .replace(/-zone-.+$/i, '')
-      .trim();
-    const zoneName = (fromZone?.zoneName || bd.zoneName || fromCustomer?.zoneName || '')
-      .replace(/^zone-/i, '')
-      .trim();
-    return {
-      ...bd,
-      enabled: bd.enabled === true,
-      customerId,
-      zoneName,
-      protocol: bd.protocol === 'socks5h' ? 'socks5h' : 'http',
-    };
-  }
-
-  async saveBrightDataSettings() {
-    const bd = this._brightDataPayload();
-    if (!bd) return;
-    if (!bd.customerId) { showNotification('أدخل Account ID أولاً', 'error'); return; }
-    if (!bd.zoneName)   { showNotification('أدخل Zone Name أولاً', 'error'); return; }
-    if (!bd.zonePassword && !bd._hasSavedPassword) {
-      showNotification('أدخل Zone Password أولاً', 'error'); return;
-    }
-    const payload = {
-      enabled:    bd.enabled === true,
-      customerId: bd.customerId,
-      zoneName:   bd.zoneName,
-      protocol:   bd.protocol || 'http',
-      batchSize:  this.form.batchSize || 3,
-      speed:      this.form.speed || 'veryfast',
-    };
-    if (bd.zonePassword) payload.zonePassword = bd.zonePassword;
-    try {
-      const r = await window.electronAPI.tsSaveBrightDataSettings(payload);
-      if (r?.settings) {
-        this.form.brightData._hasSavedPassword = r.settings.hasPassword;
-        this.form.brightData.zonePassword = '';
-      }
-      showNotification('✓ تم حفظ إعدادات Bright Data — سيتم تحميلها تلقائياً في كل جلسة', 'success');
-      this.render();
-    } catch (e) {
-      showNotification(e.message || 'فشل الحفظ', 'error');
     }
   }
 

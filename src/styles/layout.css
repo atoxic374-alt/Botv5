@@ -62,26 +62,6 @@ button {
   cursor: pointer;
 }
 
-/* ── SVG icon sizing ── */
-.ic {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  vertical-align: -2px;
-}
-.ic-sm { width: 14px; height: 14px; }
-.ic-xs { width: 12px; height: 12px; vertical-align: -1px; }
-.ic-lg { width: 20px; height: 20px; }
-
-/* ── Nav button icon ── */
-.nav-ic {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  vertical-align: -1px;
-  margin-inline-end: 4px;
-}
-
 body::selection {
   background: rgba(124, 224, 196, 0.24);
 }
@@ -143,19 +123,16 @@ body::selection {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  position: relative;
 }
 
 .page-container {
-  position: absolute;
-  inset: 0;
+  height: 100%;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: clamp(12px, 2vw, 22px);
   padding-bottom: clamp(72px, 10vh, 118px);
   opacity: 0;
   transform: translateY(12px);
-  pointer-events: none;
   transition: opacity var(--transition-speed) var(--transition-smooth),
               transform var(--transition-speed) var(--transition-smooth);
 }
@@ -163,7 +140,6 @@ body::selection {
 .page-container.active {
   opacity: 1;
   transform: translateY(0);
-  pointer-events: auto;
 }
 
 .reload-banner {

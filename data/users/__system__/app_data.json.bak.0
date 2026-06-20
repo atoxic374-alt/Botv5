@@ -6,9 +6,5 @@
     "banner": null,
     "updatedAt": 0
   },
-  "tsCaptcha": {},
-  "tsBulkTokenCounter": 0,
-  "tsBrightData": {},
-  "acSettings": {},
-  "acLibrary": []
+  "tsCaptcha": {}
 }
