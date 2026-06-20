@@ -2485,6 +2485,37 @@ const ts = require('./lib/trueStudio');
             } catch (_e) {
               tsLog('warn', `تعذر تحضير Portal على ${currentEmail}: ` + (_e.message || _e));
             }
+            // ── Refresh team context for new account ──────────────────────────
+            // The previous account's teamId may not belong to this account.
+            // Load this account's own teams and pick the best match.
+            if (rules.linkBots && !rules.createTeams) {
+              try {
+                const _newTeams = await ts.listTeams({ token, netOpts });
+                if (_newTeams && _newTeams.length) {
+                  const _newAvail = _newTeams.map(t => ({ id: t.id, name: t.name, appCount: t.apps?.length || 0 }));
+                  // Prefer the originally-selected team if this account owns it too
+                  const _preferred = selectedTeamId ? _newAvail.find(t => t.id === selectedTeamId) : null;
+                  const _picked = _preferred || _newAvail[0];
+                  availableTeams = _newAvail;
+                  teamId = _picked.id;
+                  s.teamId = teamId;
+                  s.teamName = _picked.name;
+                  tsLog('info', `تيم الحساب الجديد: ${_picked.name} (${_picked.appCount || 0}/25)`);
+                } else {
+                  // New account has no teams — create bots without linking
+                  availableTeams = [];
+                  teamId = null;
+                  s.teamId = null;
+                  s.teamName = '';
+                  tsLog('warn', `${currentEmail}: لا يوجد تيم — سيتم إنشاء البوتات بدون ربط`);
+                }
+                pushTsEvent('ts_progress');
+              } catch (_te) {
+                tsLog('warn', `تعذر جلب تيمات ${currentEmail}: ` + (_te.message || _te) + ' — إنشاء بدون ربط');
+                teamId = null;
+                s.teamId = null;
+              }
+            }
             return true;
           } catch (_e) {
             tsLog('warn', `فشل التبديل إلى ${_ae}: ` + (_e.message || _e));
