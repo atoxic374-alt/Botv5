@@ -13,7 +13,8 @@ const { testProxy } = require('./lib/proxy');
 const app = express();
 app.set('trust proxy', 1);
 const PORT = Number(process.env.PORT || 5000);
-const BUILD_STAMP = String(Date.now());
+let BUILD_STAMP;
+try { BUILD_STAMP = String(Math.floor(fs.statSync(__filename).mtimeMs / 1000)); } catch (_) { BUILD_STAMP = String(Date.now()); }
 
 app.use(helmet({
   contentSecurityPolicy: false,
@@ -1486,6 +1487,20 @@ const ts = require('./lib/trueStudio');
     if (!acct) return fail(res, new Error('Account not found'));
     const creds = tsDecryptAccount(acct);
     if (!creds.password && !creds.directToken) return fail(res, new Error('Saved account has no password and no direct token — re-save it'));
+
+    // Guard: prevent duplicate concurrent tests on the same account
+    if (!app._testAccountLocks) app._testAccountLocks = new Set();
+    if (app._testAccountLocks.has(target)) {
+      return fail(res, new Error('فحص الحساب قيد التنفيذ بالفعل — انتظر حتى ينتهي'));
+    }
+    app._testAccountLocks.add(target);
+
+    // Overall timeout for the entire test (30s)
+    let _testTimer;
+    const _testTimeout = new Promise((_, reject) => {
+      _testTimer = setTimeout(() => reject(Object.assign(new Error('انتهت مهلة فحص الحساب (30 ثانية) — تحقق من الاتصال والتوكن'), { code: 'TEST_TIMEOUT' })), 30000);
+    });
+
     try {
       const client = ts.createClient();
       const netOpts = { solveCaptcha: buildSolveCaptcha(), client };
@@ -1503,17 +1518,20 @@ const ts = require('./lib/trueStudio');
           token = r.token; userId = r.userId;
         }
         // Use the same warmed client for /users/@me so cookies match
-        const meR = await client.http.get('https://discord.com/api/v9/users/@me', {
-          headers: {
-            Authorization: token,
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'X-Super-Properties': client.superPropsB64,
-            'X-Fingerprint': client.fingerprint || undefined,
-            'Origin': 'https://discord.com',
-            'Referer': 'https://discord.com/channels/@me',
-          },
-          timeout: 15000, validateStatus: () => true,
-        }).catch(() => ({ status: 0, data: null }));
+        const meR = await Promise.race([
+          client.http.get('https://discord.com/api/v9/users/@me', {
+            headers: {
+              Authorization: token,
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+              'X-Super-Properties': client.superPropsB64,
+              'X-Fingerprint': client.fingerprint || undefined,
+              'Origin': 'https://discord.com',
+              'Referer': 'https://discord.com/channels/@me',
+            },
+            timeout: 12000, validateStatus: () => true,
+          }).catch(() => ({ status: 0, data: null })),
+          _testTimeout,
+        ]);
         if (meR.status >= 400) {
           verify.status = 'token_unusable';
           verify.message = `Login OK but /users/@me returned ${meR.status}`;
@@ -1527,7 +1545,10 @@ const ts = require('./lib/trueStudio');
             mfa_enabled: !!meR.data?.mfa_enabled,
             verified: !!meR.data?.verified,
           };
-          const health = await ts.accountHealthProbe({ token, netOpts: { client } });
+          const health = await Promise.race([
+            ts.accountHealthProbe({ token, netOpts: { client } }),
+            _testTimeout,
+          ]);
           verify.health = health;
           if (!health.ok) {
             verify.ok = false;
@@ -1561,6 +1582,9 @@ const ts = require('./lib/trueStudio');
       ok(res, { verify, accounts: tsAccountsPublic() });
     } catch (e) {
       fail(res, e);
+    } finally {
+      clearTimeout(_testTimer);
+      if (app._testAccountLocks) app._testAccountLocks.delete(target);
     }
   });
 
@@ -2085,11 +2109,23 @@ const ts = require('./lib/trueStudio');
 
   app.post('/api/ts/stop', (req, res) => {
     const s = tsSession();
-    if (s.state === 'idle' || s.state === 'done' || s.state === 'cancelled') {
-      return ok(res, { snapshot: tsSnapshot() });
-    }
+    const accountEmail = s.account;
+
+    // Signal cancellation to any running background task
     s.cancelRequested = true;
-    tsLog('warn', 'إيقاف الجلسة قيد التنفيذ…');
+
+    // Immediately reset the entire session to a clean idle state
+    const fresh = ts.makeSession();
+    Object.assign(s, fresh);
+    s.state = 'idle';
+
+    // Clear the token cache for the stopped account so the next run
+    // starts with a fresh login instead of a potentially stale session
+    if (accountEmail) tsClearToken(accountEmail);
+
+    // Also clear all cached tokens to guarantee a truly fresh start
+    _tsTokenCache.clear();
+
     pushTsEvent('ts_progress');
     ok(res, { snapshot: tsSnapshot() });
   });
