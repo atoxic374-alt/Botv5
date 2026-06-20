@@ -118,13 +118,20 @@ export class TrueStudioManager {
   }
 
   openSSE() {
+    const types = [
+      'ts_progress', 'ts_log', 'ts_bot_created', 'ts_done',
+      'ts_captcha', 'ts_captcha_resolved', 'ts_captcha_cancelled', 'ts_captcha_timeout',
+      'ts_reset_all_progress', 'ts_reset_all_done',
+    ].join(',');
+    this._sseTypes = types;
+    this._connectSSE();
+  }
+
+  _connectSSE() {
+    if (this._sseClosed) return;
     try {
-      const types = [
-        'ts_progress', 'ts_log', 'ts_bot_created', 'ts_done',
-        'ts_captcha', 'ts_captcha_resolved', 'ts_captcha_cancelled', 'ts_captcha_timeout',
-        'ts_reset_all_progress', 'ts_reset_all_done',
-      ].join(',');
-      this.sse = new EventSource(`/api/features/stream?types=${types}`);
+      if (this.sse) { try { this.sse.close(); } catch (_) {} }
+      this.sse = new EventSource(`/api/features/stream?types=${this._sseTypes}`);
       this.sse.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data);
@@ -184,7 +191,14 @@ export class TrueStudioManager {
           this._renderLive();
         } catch (e) {}
       };
-      this.sse.onerror = () => {};
+      // Auto-reconnect on error/disconnect with a short delay
+      this.sse.onerror = () => {
+        try { this.sse.close(); } catch (_) {}
+        if (!this._sseClosed) {
+          clearTimeout(this._sseReconnectTimer);
+          this._sseReconnectTimer = setTimeout(() => this._connectSSE(), 2000);
+        }
+      };
     } catch (e) {}
   }
 
@@ -4003,7 +4017,7 @@ export class TrueStudioManager {
       return;
     }
     try {
-      await window.electronAPI.tsStart({
+      const started = await window.electronAPI.tsStart({
         email: this.selectedEmail,
         rules: r,
         count: this.form.count,
@@ -4016,10 +4030,13 @@ export class TrueStudioManager {
         batchSize: this.form.batchSize || 1,
         sessionBudget: this.form.sessionBudget || 0,
       });
+      // Immediately apply the snapshot from the start response so the UI
+      // switches to "running" without waiting for the next SSE event.
+      if (started?.snapshot) this.snapshot = started.snapshot;
       showNotification(t('ts.session_started'), 'success');
       sfx.ding?.();
-      await this.refresh();
-      this._renderLive();
+      // Full re-render so the Start button becomes Stop, progress resets, etc.
+      this.render();
     } catch (e) {
       showNotification(e.message || 'Start failed', 'error');
     }
@@ -4027,10 +4044,11 @@ export class TrueStudioManager {
 
   async stopSession() {
     try {
-      await window.electronAPI.tsStop();
+      const stopped = await window.electronAPI.tsStop();
+      if (stopped?.snapshot) this.snapshot = stopped.snapshot;
       showNotification(t('ts.session_stopping'), 'warn');
-      await this.refresh();
-      this._renderLive();
+      // Full re-render so the Stop button reverts to Start immediately.
+      this.render();
     } catch (e) {
       showNotification(e.message || 'Stop failed', 'error');
     }
