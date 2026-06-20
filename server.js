@@ -1727,6 +1727,29 @@ const ts = require('./lib/trueStudio');
     }
   });
 
+  // ── Proxy settings persistence ─────────────────────────────────────────
+  // Saves proxy URL + Bright Data config so the user doesn't re-type on reload.
+  app.get('/api/ts/proxy-settings', (req, res) => {
+    try {
+      const d = ensureData();
+      ok(res, { settings: d.tsProxySettings || { proxyUrl: '', brightData: null } });
+    } catch (e) { fail(res, e); }
+  });
+
+  app.post('/api/ts/proxy-settings', (req, res) => {
+    try {
+      const { proxyUrl, brightData } = req.body || {};
+      const d = ensureData();
+      d.tsProxySettings = {
+        proxyUrl:   typeof proxyUrl === 'string' ? proxyUrl : '',
+        brightData: brightData && typeof brightData === 'object' ? brightData : null,
+        savedAt:    Date.now(),
+      };
+      writeData(d);
+      ok(res, { settings: d.tsProxySettings });
+    } catch (e) { fail(res, e); }
+  });
+
   // ── Standalone team management ──────────────────────────────────────────
   // List teams for the selected account (used by UI team-selector dropdown).
   app.get('/api/ts/teams', async (req, res) => {

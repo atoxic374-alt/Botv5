@@ -77,6 +77,7 @@ export class TrueStudioManager {
       await this._loadBotTokens();
       await this._loadPfp();
       await this._loadAutoIntents();
+      await this._loadProxySettings();
       this.openSSE();
       this._startCountdownTicker();
       this._inited = true;
@@ -645,6 +646,27 @@ export class TrueStudioManager {
       const r = await window.electronAPI.tsGetAutoIntents();
       this._autoIntents = !!r?.autoIntents;
     } catch (_) { this._autoIntents = false; }
+  }
+
+  async _loadProxySettings() {
+    try {
+      const r = await window.electronAPI.tsGetProxySettings();
+      if (r?.settings) {
+        if (typeof r.settings.proxyUrl === 'string') this.form.proxyUrl = r.settings.proxyUrl;
+        if (r.settings.brightData && typeof r.settings.brightData === 'object') {
+          this.form.brightData = { ...this.form.brightData, ...r.settings.brightData };
+        }
+      }
+    } catch (_) { /* non-fatal */ }
+  }
+
+  _saveProxySettings() {
+    try {
+      window.electronAPI.tsSaveProxySettings({
+        proxyUrl:   this.form.proxyUrl || '',
+        brightData: this.form.brightData || null,
+      });
+    } catch (_) { /* non-fatal */ }
   }
 
   async _toggleAutoIntents() {
@@ -3629,10 +3651,13 @@ export class TrueStudioManager {
       });
     });
 
-    // Proxy URL textarea (one proxy per line)
+    // Proxy URL textarea — auto-save after user stops typing (debounced 600ms)
+    let _proxyUrlSaveTimer = null;
     $('#ts-proxy-url')?.addEventListener('input', (e) => {
       this.form.proxyUrl = e.target.value;
       this._proxyTestResult = null;
+      clearTimeout(_proxyUrlSaveTimer);
+      _proxyUrlSaveTimer = setTimeout(() => this._saveProxySettings(), 600);
     });
 
     // ── Bright Data toggle ──────────────────────────────────────────
@@ -3640,28 +3665,35 @@ export class TrueStudioManager {
       if (!this.form.brightData) this.form.brightData = { enabled: false, customerId: '', zoneName: '', zonePassword: '', protocol: 'http' };
       this.form.brightData.enabled = !this.form.brightData.enabled;
       this._proxyTestResult = null;
+      this._saveProxySettings();
       this.render();
     });
 
     // ── Bright Data credential inputs ───────────────────────────────
+    let _bdSaveTimer = null;
+    const _debouncedBdSave = () => { clearTimeout(_bdSaveTimer); _bdSaveTimer = setTimeout(() => this._saveProxySettings(), 600); };
     $('#ts-bd-customer')?.addEventListener('input', (e) => {
       if (!this.form.brightData) return;
       this.form.brightData.customerId = e.target.value.trim();
       this._proxyTestResult = null;
+      _debouncedBdSave();
     });
     $('#ts-bd-zone')?.addEventListener('input', (e) => {
       if (!this.form.brightData) return;
       this.form.brightData.zoneName = e.target.value.trim();
       this._proxyTestResult = null;
+      _debouncedBdSave();
     });
     $('#ts-bd-pass')?.addEventListener('input', (e) => {
       if (!this.form.brightData) return;
       this.form.brightData.zonePassword = e.target.value;
       this._proxyTestResult = null;
+      _debouncedBdSave();
     });
     $('#ts-bd-proto')?.addEventListener('change', (e) => {
       if (!this.form.brightData) return;
       this.form.brightData.protocol = e.target.value || 'http';
+      this._saveProxySettings();
     });
 
     // Batch size selector (shown when IP rotation is active)

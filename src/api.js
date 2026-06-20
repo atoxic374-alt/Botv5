@@ -97,6 +97,8 @@ window.electronAPI = {
   tsSaveBotToken: (data) => apiCall('POST', '/api/ts/bot-tokens', data),
   tsDeleteBotToken: (appId) => apiCall('DELETE', `/api/ts/bot-tokens/${encodeURIComponent(appId)}`),
   tsVerifyProxy: (proxyUrl) => apiCall('POST', '/api/ts/proxy-verify', { proxyUrl }),
+  tsGetProxySettings: () => apiCall('GET', '/api/ts/proxy-settings'),
+  tsSaveProxySettings: (payload) => apiCall('POST', '/api/ts/proxy-settings', payload),
   tsListTeams: (email) => apiCall('GET', `/api/ts/teams?email=${encodeURIComponent(email)}`),
   tsCreateTeam: (email, name) => apiCall('POST', '/api/ts/teams/create', { email, name }),
   tsAddAppToTeam: (email, appId, teamId) =>
